@@ -1,0 +1,13 @@
+module(
+    name = "universal_protocol_runtime",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_python", version = "1.8.4")
+bazel_dep(name = "yaml-cpp", version = "0.8.0.bcr.1")
+bazel_dep(name = "google_benchmark", version = "1.9.5")
+bazel_dep(name = "protobuf", version = "34.0.bcr.1")
+bazel_dep(name = "flatbuffers", version = "25.12.19")
+
+bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)

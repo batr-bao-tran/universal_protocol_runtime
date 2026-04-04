@@ -1,0 +1,13 @@
+#ifndef UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_COMPILER_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_COMPILER__SCHEMA_COMPILER_HPP_
+#define UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_COMPILER_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_COMPILER__SCHEMA_COMPILER_HPP_
+#include "universal_protocol_runtime/compiler/compiled_protocol.hpp"
+#include "universal_protocol_runtime/pdl/protocol_definition.hpp"
+#include "utils/status.hpp"
+
+namespace universal_protocol_runtime {
+
+StatusOr<CompiledProtocol> compile_protocol(const ProtocolDefinition& definition);
+
+}  // namespace universal_protocol_runtime
+
+#endif  // UNIVERSAL_PROTOCOL_RUNTIME__UNIVERSAL_PROTOCOL_RUNTIME_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_COMPILER__SCHEMA_COMPILER_HPP_

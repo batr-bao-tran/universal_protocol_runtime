@@ -1,0 +1,58 @@
+exclude: |
+  (?x)(
+    ^third_party/ |
+    ^bazel- |
+    ^\.git/
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-byte-order-marker
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-yaml
+        args: ["--allow-multiple-documents"]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: trailing-whitespace
+  - repo: https://github.com/keith/pre-commit-buildifier
+    rev: 8.2.1
+    hooks:
+      - id: buildifier
+        args: ["-mode=fix", "-lint=fix"]
+      - id: buildifier-lint
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v15.0.7
+    hooks:
+      - id: clang-format
+        files: \.(cpp|cxx|c|cc|h|hpp|hxx|txx)$
+  - repo: local
+    hooks:
+      - id: clang-tidy-fix
+        name: clang-tidy
+        entry: python3 scripts/run_clang_tidy_fix.py --fix
+        language: system
+        files: \.(cpp|cxx|cc|h|hpp|hxx|txx)$
+        exclude: '((^|/)third_party/|(^|/)external/)'
+        pass_filenames: true
+  - repo: local
+    hooks:
+      - id: fix-header-guards
+        name: fix-header-guards
+        entry: python3 scripts/fix_header_guards.py
+        language: system
+        files: \.(hpp|h|hxx)$
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint

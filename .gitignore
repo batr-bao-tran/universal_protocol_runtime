@@ -1,0 +1,58 @@
+# Build artifacts are not committed. Build locally or use CI/release artifacts.
+
+# Bazel
+bazel-*
+.bazelrc.user
+
+# Compiled / generated
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# Coverage / profiling
+*.gcno
+*.gcda
+*.gcov
+*.profraw
+*.profdata
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+
+# Generated tooling files
+compile_commands.json
+compile_commands.*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.python-version
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# IDE / editors
+.idea/
+.vscode/
+.cache/
+.clangd/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp

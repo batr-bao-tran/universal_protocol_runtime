@@ -1,0 +1,20 @@
+namespace upr_benchmarks;
+
+table MarketData {
+  message_type:ubyte;
+  instrument_id:uint;
+  sequence:uint;
+  exchange_time_ns:ulong;
+  receive_time_ns:ulong;
+  last_price:double;
+  last_qty:uint;
+  bid_qty:uint;
+  ask_qty:uint;
+  bid_price_micros:uint;
+  ask_price_micros:uint;
+  symbol:string;
+  flags:ubyte;
+  checksum:ushort;
+}
+
+root_type MarketData;

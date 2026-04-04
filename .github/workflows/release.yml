@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  BAZEL_VERSION: "8.5.0"
+  BAZEL_CACHE_VERSION: "v1"
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lld
+        run: sudo apt-get update && sudo apt-get install -y lld
+
+      - name: Compute Bazel cache settings
+        id: bazel-cache
+        run: |
+          {
+            echo "disk_cache_dir=${RUNNER_TEMP}/bazel-disk-cache/ubuntu-24.04"
+            echo "disk_cache_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-default-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-${{ github.sha }}"
+            echo "disk_restore_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-default-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-"
+            echo "repository_cache_dir=${RUNNER_TEMP}/bazel-repository-cache/ubuntu-24.04"
+            echo "repository_cache_key=bazel-repository-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'MODULE.bazel.lock') }}-${{ github.sha }}"
+            echo "repository_restore_key=bazel-repository-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'MODULE.bazel.lock') }}-"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.0
+        with:
+          bazel_version: ${{ env.BAZEL_VERSION }}
+
+      - name: Restore Bazel disk cache
+        id: restore-disk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+          restore-keys: |
+            ${{ steps.bazel-cache.outputs.disk_restore_key }}
+
+      - name: Restore Bazel repository cache
+        id: restore-repository-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.repository_cache_key }}
+          restore-keys: |
+            ${{ steps.bazel-cache.outputs.repository_restore_key }}
+
+      - name: Build
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+        run: tools/ci/bazel_ci.sh build //packages/universal_protocol_runtime:universal_protocol_runtime
+
+      - name: Test
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+        run: tools/ci/bazel_ci.sh test //... --test_output=errors
+
+      - name: Prepare package
+        id: pkg
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$VERSION" == "" || "$VERSION" == "$GITHUB_REF_NAME" ]] && VERSION="0.0.0-dev"
+          PKGDIR="universal_protocol_runtime-${VERSION}-linux_amd64"
+          mkdir -p "$PKGDIR/include" "$PKGDIR/lib"
+          cp -r packages/universal_protocol_runtime/include/universal_protocol_runtime "$PKGDIR/include/"
+          LIBFILE=$(find bazel-bin/packages/universal_protocol_runtime -maxdepth 1 -type f \( -name '*.a' -o -name '*.so' \) 2>/dev/null | head -1)
+          if [ -n "$LIBFILE" ]; then
+            cp "$LIBFILE" "$PKGDIR/lib/"
+          fi
+          tar czf "${PKGDIR}.tar.gz" "$PKGDIR"
+          echo "package=${PKGDIR}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Save Bazel disk cache
+        if: steps.restore-disk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+
+      - name: Save Bazel repository cache
+        if: steps.restore-repository-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.repository_cache_key }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal_protocol_runtime-linux_amd64
+          path: ${{ steps.pkg.outputs.package }}
+
+  upload-release-assets:
+    needs: package
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/**/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
