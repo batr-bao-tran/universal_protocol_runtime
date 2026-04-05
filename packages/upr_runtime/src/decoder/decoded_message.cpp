@@ -2,191 +2,32 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstring>
 
 #include "universal_protocol_runtime/core/unreachable.hpp"
+#include "universal_protocol_runtime/decoder/direct_decode_support.hpp"
 
 namespace universal_protocol_runtime {
 namespace {
 
-constexpr uint8_t kMaxScalarWidthBytes = sizeof(uint64_t);
-constexpr uint8_t kMaxBitWidth = 64U;
-constexpr uint8_t kAsciiHighBitMask = 0x80U;
-constexpr uint8_t kUtf8TwoByteLeadMask = 0xE0U;
-constexpr uint8_t kUtf8ThreeByteLeadMask = 0xF0U;
-constexpr uint8_t kUtf8FourByteLeadMask = 0xF8U;
-constexpr uint8_t kUtf8ContinuationMask = 0xC0U;
-constexpr uint8_t kUtf8ContinuationTag = 0x80U;
-constexpr uint8_t kUtf8TwoByteLeadTag = 0xC0U;
-constexpr uint8_t kUtf8ThreeByteLeadTag = 0xE0U;
-constexpr uint8_t kUtf8FourByteLeadTag = 0xF0U;
-constexpr uint8_t kUtf8SingleByteMask = 0x80U;
-constexpr uint8_t kUtf8TwoBytePayloadMask = 0x1FU;
-constexpr uint8_t kUtf8ThreeBytePayloadMask = 0x0FU;
-constexpr uint8_t kUtf8FourBytePayloadMask = 0x07U;
-constexpr uint8_t kUtf8ContinuationPayloadMask = 0x3FU;
-constexpr uint32_t kUtf8MaxCodePoint = 0x10FFFFU;
-constexpr uint32_t kUtf8SurrogateStart = 0xD800U;
-constexpr uint32_t kUtf8SurrogateEnd = 0xDFFFU;
-constexpr uint32_t kUtf8MinCodePointTwoByte = 0x80U;
-constexpr uint32_t kUtf8MinCodePointThreeByte = 0x800U;
-constexpr uint32_t kUtf8MinCodePointFourByte = 0x10000U;
-
-std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes, ByteOrder byte_order) {
-  if (bytes.empty() || bytes.size() > kMaxScalarWidthBytes) {
-    return std::nullopt;
+bool supports_eager_scalar_cache(const CompiledField& field) {
+  if (!field.is_scalar()) {
+    return false;
   }
-  const auto* data = reinterpret_cast<const uint8_t*>(bytes.data());
-  switch (byte_order) {
-    case ByteOrder::kLittleEndian:
-      switch (bytes.size()) {
-        case 1:
-          return static_cast<uint64_t>(data[0]);
-        case 2:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U);
-        case 3:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U);
-        case 4:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 24U);
-        case 5:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 24U) |
-                 (static_cast<uint64_t>(data[4]) << 32U);
-        case 6:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 24U) |
-                 (static_cast<uint64_t>(data[4]) << 32U) | (static_cast<uint64_t>(data[5]) << 40U);
-        case 7:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 24U) |
-                 (static_cast<uint64_t>(data[4]) << 32U) | (static_cast<uint64_t>(data[5]) << 40U) |
-                 (static_cast<uint64_t>(data[6]) << 48U);
-        case 8:
-          return static_cast<uint64_t>(data[0]) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 24U) |
-                 (static_cast<uint64_t>(data[4]) << 32U) | (static_cast<uint64_t>(data[5]) << 40U) |
-                 (static_cast<uint64_t>(data[6]) << 48U) | (static_cast<uint64_t>(data[7]) << 56U);
-        default:
-          unreachable();
-      }
-    case ByteOrder::kBigEndian:
-      switch (bytes.size()) {
-        case 1:
-          return static_cast<uint64_t>(data[0]);
-        case 2:
-          return (static_cast<uint64_t>(data[0]) << 8U) | static_cast<uint64_t>(data[1]);
-        case 3:
-          return (static_cast<uint64_t>(data[0]) << 16U) | (static_cast<uint64_t>(data[1]) << 8U) |
-                 static_cast<uint64_t>(data[2]);
-        case 4:
-          return (static_cast<uint64_t>(data[0]) << 24U) | (static_cast<uint64_t>(data[1]) << 16U) |
-                 (static_cast<uint64_t>(data[2]) << 8U) | static_cast<uint64_t>(data[3]);
-        case 5:
-          return (static_cast<uint64_t>(data[0]) << 32U) | (static_cast<uint64_t>(data[1]) << 24U) |
-                 (static_cast<uint64_t>(data[2]) << 16U) | (static_cast<uint64_t>(data[3]) << 8U) |
-                 static_cast<uint64_t>(data[4]);
-        case 6:
-          return (static_cast<uint64_t>(data[0]) << 40U) | (static_cast<uint64_t>(data[1]) << 32U) |
-                 (static_cast<uint64_t>(data[2]) << 24U) | (static_cast<uint64_t>(data[3]) << 16U) |
-                 (static_cast<uint64_t>(data[4]) << 8U) | static_cast<uint64_t>(data[5]);
-        case 7:
-          return (static_cast<uint64_t>(data[0]) << 48U) | (static_cast<uint64_t>(data[1]) << 40U) |
-                 (static_cast<uint64_t>(data[2]) << 32U) | (static_cast<uint64_t>(data[3]) << 24U) |
-                 (static_cast<uint64_t>(data[4]) << 16U) | (static_cast<uint64_t>(data[5]) << 8U) |
-                 static_cast<uint64_t>(data[6]);
-        case 8:
-          return (static_cast<uint64_t>(data[0]) << 56U) | (static_cast<uint64_t>(data[1]) << 48U) |
-                 (static_cast<uint64_t>(data[2]) << 40U) | (static_cast<uint64_t>(data[3]) << 32U) |
-                 (static_cast<uint64_t>(data[4]) << 24U) | (static_cast<uint64_t>(data[5]) << 16U) |
-                 (static_cast<uint64_t>(data[6]) << 8U) | static_cast<uint64_t>(data[7]);
-        default:
-          unreachable();
-      }
-  }
-  unreachable();
-}
-
-std::optional<int64_t> sign_extend(uint64_t value, uint8_t width_bits) {
-  if (width_bits == 0 || width_bits > kMaxBitWidth) {
-    return std::nullopt;
-  }
-  if (width_bits == kMaxBitWidth) {
-    return static_cast<int64_t>(value);
-  }
-  const uint64_t sign_mask = 1ULL << (width_bits - 1U);
-  const uint64_t full_mask = (1ULL << width_bits) - 1ULL;
-  value &= full_mask;
-  if ((value & sign_mask) == 0U) {
-    return static_cast<int64_t>(value);
-  }
-  return static_cast<int64_t>(value | ~full_mask);
-}
-
-template <typename FloatType, typename UIntType>
-std::optional<FloatType> read_float(ByteSpan bytes, ByteOrder byte_order) {
-  const auto raw = read_unsigned_scalar(bytes, byte_order);
-  if (!raw.has_value()) {
-    return std::nullopt;
-  }
-  const auto normalized = static_cast<UIntType>(*raw);
-  return std::bit_cast<FloatType>(normalized);
-}
-
-bool is_valid_ascii(ByteSpan bytes) {
-  return std::all_of(bytes.begin(), bytes.end(), [](const std::byte byte) {
-    return (std::to_integer<uint8_t>(byte) & kAsciiHighBitMask) == 0U;
-  });
-}
-
-bool is_valid_utf8(ByteSpan bytes) {
-  size_t index = 0;
-  while (index < bytes.size()) {
-    const auto lead = std::to_integer<uint8_t>(bytes[index]);
-    size_t continuation_count = 0;
-    uint32_t code_point = 0;
-
-    if ((lead & kUtf8SingleByteMask) == 0U) {
-      continuation_count = 0;
-      code_point = lead;
-    } else if ((lead & kUtf8TwoByteLeadMask) == kUtf8TwoByteLeadTag) {
-      continuation_count = 1;
-      code_point = lead & kUtf8TwoBytePayloadMask;
-      if (code_point == 0U) {
-        return false;
-      }
-    } else if ((lead & kUtf8ThreeByteLeadMask) == kUtf8ThreeByteLeadTag) {
-      continuation_count = 2;
-      code_point = lead & kUtf8ThreeBytePayloadMask;
-    } else if ((lead & kUtf8FourByteLeadMask) == kUtf8FourByteLeadTag) {
-      continuation_count = 3;
-      code_point = lead & kUtf8FourBytePayloadMask;
-    } else {
+  switch (field.kind) {
+    case FieldKind::kUnsigned:
+    case FieldKind::kSigned:
+    case FieldKind::kEnum:
+      return field.width_bytes > 0 && field.width_bytes <= direct_decode_support::kMaxScalarWidthBytes;
+    case FieldKind::kFloat32:
+      return field.width_bytes == sizeof(uint32_t);
+    case FieldKind::kFloat64:
+      return field.width_bytes == sizeof(uint64_t);
+    case FieldKind::kBytes:
+    case FieldKind::kString:
+    case FieldKind::kStruct:
       return false;
-    }
-
-    if (index + continuation_count >= bytes.size()) {
-      return false;
-    }
-    for (size_t continuation = 0; continuation < continuation_count; ++continuation) {
-      const auto next = std::to_integer<uint8_t>(bytes[index + continuation + 1U]);
-      if ((next & kUtf8ContinuationMask) != kUtf8ContinuationTag) {
-        return false;
-      }
-      code_point = (code_point << 6U) | static_cast<uint32_t>(next & kUtf8ContinuationPayloadMask);
-    }
-
-    if ((continuation_count == 1U && code_point < kUtf8MinCodePointTwoByte) ||
-        (continuation_count == 2U && code_point < kUtf8MinCodePointThreeByte) ||
-        (continuation_count == 3U && code_point < kUtf8MinCodePointFourByte) || code_point > kUtf8MaxCodePoint ||
-        (code_point >= kUtf8SurrogateStart && code_point <= kUtf8SurrogateEnd)) {
-      return false;
-    }
-
-    index += continuation_count + 1U;
   }
-  return true;
+  unreachable();  // LCOV_EXCL_LINE
 }
 
 std::optional<size_t> checksum_anchor_offset(
@@ -212,7 +53,7 @@ std::optional<size_t> checksum_anchor_offset(
       }
       return resolved_fields[anchor.field_id].offset + resolved_fields[anchor.field_id].size;
   }
-  return std::nullopt;
+  return std::nullopt;  // LCOV_EXCL_LINE
 }
 
 }  // namespace
@@ -259,10 +100,9 @@ std::optional<DecodedMessage::ResolvedField> DecodedMessage::resolved_field(Fiel
   return resolved_fields_[field_id];
 }
 
-std::optional<uint64_t> DecodedMessage::cached_container_unsigned(FieldId field_id) const {
+std::optional<uint64_t> DecodedMessage::cached_scalar_raw(FieldId field_id) const {
   const CompiledField* field = field_definition(field_id);
-  if (field == nullptr || !field->is_scalar() || field->kind == FieldKind::kFloat32 ||
-      field->kind == FieldKind::kFloat64) {
+  if (field == nullptr || !field->is_scalar()) {
     return std::nullopt;
   }
   if (field_id >= field_count_) {
@@ -271,17 +111,20 @@ std::optional<uint64_t> DecodedMessage::cached_container_unsigned(FieldId field_
   if (scalar_cache_valid_[field_id]) {
     return scalar_cache_values_[field_id];
   }
-  const auto resolved = resolved_field(field_id);
-  if (!resolved.has_value()) {
-    return std::nullopt;
+  return std::nullopt;
+}
+
+void DecodedMessage::eager_cache_scalar(FieldId field_id, ByteSpan field_bytes) {
+  const CompiledField* field = field_definition(field_id);
+  if (field == nullptr || !supports_eager_scalar_cache(*field) || field_bytes.size() != field->width_bytes) {
+    return;
   }
-  const auto value = read_unsigned_scalar(frame_.subspan(resolved->offset, resolved->size), field->byte_order);
+  const auto value = direct_decode_support::read_unsigned_scalar(field_bytes, field->byte_order);
   if (!value.has_value()) {
-    return std::nullopt;
+    return;
   }
   scalar_cache_values_[field_id] = *value;
   scalar_cache_valid_[field_id] = true;
-  return value;
 }
 
 std::optional<uint64_t> DecodedMessage::get_unsigned(FieldId field_id) const {
@@ -289,7 +132,7 @@ std::optional<uint64_t> DecodedMessage::get_unsigned(FieldId field_id) const {
   if (field == nullptr || (field->kind != FieldKind::kUnsigned && field->kind != FieldKind::kEnum)) {
     return std::nullopt;
   }
-  return cached_container_unsigned(field_id);
+  return cached_scalar_raw(field_id);
 }
 
 std::optional<int64_t> DecodedMessage::get_signed(FieldId field_id) const {
@@ -297,35 +140,35 @@ std::optional<int64_t> DecodedMessage::get_signed(FieldId field_id) const {
   if (field == nullptr || field->kind != FieldKind::kSigned) {
     return std::nullopt;
   }
-  const auto raw = cached_container_unsigned(field_id);
+  const auto raw = cached_scalar_raw(field_id);
   if (!raw.has_value()) {
     return std::nullopt;
   }
-  return sign_extend(*raw, static_cast<uint8_t>(field->width_bytes * kBitsPerByte));
+  return direct_decode_support::sign_extend(*raw, static_cast<uint8_t>(field->width_bytes * kBitsPerByte));
 }
 
 std::optional<float> DecodedMessage::get_float32(FieldId field_id) const {
   const CompiledField* field = field_definition(field_id);
-  if (field == nullptr || field->kind != FieldKind::kFloat32) {
+  if (field == nullptr || field->kind != FieldKind::kFloat32 || field->width_bytes != sizeof(uint32_t)) {
     return std::nullopt;
   }
-  const auto value = get_bytes(field_id);
+  const auto value = cached_scalar_raw(field_id);
   if (!value.has_value()) {
     return std::nullopt;
   }
-  return read_float<float, uint32_t>(*value, field->byte_order);
+  return std::bit_cast<float>(static_cast<uint32_t>(*value));
 }
 
 std::optional<double> DecodedMessage::get_float64(FieldId field_id) const {
   const CompiledField* field = field_definition(field_id);
-  if (field == nullptr || field->kind != FieldKind::kFloat64) {
+  if (field == nullptr || field->kind != FieldKind::kFloat64 || field->width_bytes != sizeof(uint64_t)) {
     return std::nullopt;
   }
-  const auto value = get_bytes(field_id);
+  const auto value = cached_scalar_raw(field_id);
   if (!value.has_value()) {
     return std::nullopt;
   }
-  return read_float<double, uint64_t>(*value, field->byte_order);
+  return std::bit_cast<double>(*value);
 }
 
 std::optional<ByteSpan> DecodedMessage::get_bytes(FieldId field_id) const {
@@ -392,7 +235,13 @@ std::optional<uint64_t> DecodedMessage::get_bit_unsigned(BitFieldId bit_field_id
   if (bit_field == nullptr) {
     return std::nullopt;
   }
-  const auto container_value = cached_container_unsigned(bit_field->container_field_id);
+  const CompiledField* container_field = field_definition(bit_field->container_field_id);
+  if (container_field == nullptr ||
+      (container_field->kind != FieldKind::kUnsigned && container_field->kind != FieldKind::kSigned &&
+       container_field->kind != FieldKind::kEnum)) {
+    return std::nullopt;
+  }
+  const auto container_value = cached_scalar_raw(bit_field->container_field_id);
   if (!container_value.has_value()) {
     return std::nullopt;
   }
@@ -408,7 +257,7 @@ std::optional<int64_t> DecodedMessage::get_bit_signed(BitFieldId bit_field_id) c
   if (!value.has_value()) {
     return std::nullopt;
   }
-  return sign_extend(*value, bit_field->width_bits);
+  return direct_decode_support::sign_extend(*value, bit_field->width_bits);
 }
 
 std::optional<std::string_view> DecodedMessage::get_bit_enum_name(BitFieldId bit_field_id) const {
@@ -530,18 +379,21 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
       return DecodeStatus::kSchemaMismatch;
     }
     candidate.resolved_fields_[field.id] = {.offset = offset, .size = field_size};
+    const ByteSpan field_bytes = frame.subspan(offset, field_size);
+    candidate.eager_cache_scalar(field.id, field_bytes);
 
     if (field.has_expected_unsigned) {
-      const auto actual = read_unsigned_scalar(frame.subspan(offset, field_size), field.byte_order);
+      const auto actual = candidate.cached_scalar_raw(field.id);
       if (!actual.has_value() || *actual != field.expected_unsigned) {
         return DecodeStatus::kSchemaMismatch;
       }
     }
 
     if (field.kind == FieldKind::kString) {
-      const ByteSpan string_bytes = frame.subspan(offset, field_size);
       const bool valid_encoding =
-          field.string_encoding == StringEncoding::kAscii ? is_valid_ascii(string_bytes) : is_valid_utf8(string_bytes);
+          field.string_encoding == StringEncoding::kAscii
+              ? direct_decode_support::runtime_validate_string<StringEncoding::kAscii>(field_bytes)
+              : direct_decode_support::runtime_validate_string<StringEncoding::kUtf8>(field_bytes);
       if (!valid_encoding) {
         return DecodeStatus::kInvalidData;
       }
@@ -565,7 +417,21 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
     if (!from_offset.has_value() || !to_offset.has_value() || *from_offset > *to_offset || *to_offset > frame.size()) {
       return DecodeStatus::kSchemaMismatch;
     }
-    const uint64_t actual = checksum.function(frame.subspan(*from_offset, *to_offset - *from_offset));
+    const ByteSpan checksum_bytes = frame.subspan(*from_offset, *to_offset - *from_offset);
+    uint64_t actual = 0;
+    if (checksum.algorithm_name == "xor8") {
+      actual = direct_decode_support::runtime_checksum_xor8(checksum_bytes);
+    } else if (checksum.algorithm_name == "sum16") {
+      actual = direct_decode_support::runtime_checksum_sum16(checksum_bytes);
+    } else if (checksum.algorithm_name == "crc16_ccitt") {
+      actual = direct_decode_support::runtime_checksum_crc16_ccitt(checksum_bytes);
+    } else if (checksum.algorithm_name == "crc32") {
+      actual = direct_decode_support::runtime_checksum_crc32(checksum_bytes);
+    } else if (checksum.algorithm_name == "crc32c") {
+      actual = direct_decode_support::runtime_checksum_crc32c(checksum_bytes);
+    } else {
+      actual = checksum.function(checksum_bytes);
+    }
     const auto expected = candidate.get_unsigned(checksum.field_id);
     if (!expected.has_value() || *expected != actual) {
       return DecodeStatus::kChecksumMismatch;

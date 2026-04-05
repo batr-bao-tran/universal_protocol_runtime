@@ -43,7 +43,7 @@ repos:
         entry: python3 scripts/run_clang_tidy_fix.py --fix
         language: system
         files: \.(cpp|cxx|cc|h|hpp|hxx|txx)$
-        exclude: '((^|/)third_party/|(^|/)external/)'
+        exclude: '((^|/)third_party/|(^|/)external/|(^|/)packages/upr_runtime/benchmarks/upr_benchmark_generated\.hpp$)'
         pass_filenames: true
   - repo: local
     hooks:

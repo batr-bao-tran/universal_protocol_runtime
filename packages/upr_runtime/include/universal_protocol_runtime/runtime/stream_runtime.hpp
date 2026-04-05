@@ -29,7 +29,7 @@ enum class DecodeFailurePolicy {
   kQuarantine,
 };
 
-inline std::string_view to_string(PollStatus status) {
+constexpr std::string_view to_string(PollStatus status) noexcept {
   switch (status) {
     case PollStatus::kMessageReady:
       return "message_ready";
@@ -49,7 +49,7 @@ inline std::string_view to_string(PollStatus status) {
   return "unknown";
 }
 
-inline std::string_view to_string(DecodeFailurePolicy policy) {
+constexpr std::string_view to_string(DecodeFailurePolicy policy) noexcept {
   switch (policy) {
     case DecodeFailurePolicy::kStop:
       return "stop";
@@ -75,7 +75,7 @@ struct PollResult {
   DecodeFailurePolicy policy = DecodeFailurePolicy::kStop;
   size_t bytes_consumed = 0;
 
-  bool message_ready() const { return status == PollStatus::kMessageReady; }
+  constexpr bool message_ready() const noexcept { return status == PollStatus::kMessageReady; }
 };
 
 struct RuntimeStats {

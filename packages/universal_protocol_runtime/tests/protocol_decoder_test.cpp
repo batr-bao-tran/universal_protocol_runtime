@@ -2,12 +2,15 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "detail/test_support.hpp"
+#include "universal_protocol_runtime/compiler/checksum_registry.hpp"
 #include "universal_protocol_runtime/compiler/schema_compiler.hpp"
+#include "universal_protocol_runtime/decoder/direct_decode_support.hpp"
 
 namespace upr = universal_protocol_runtime;
 
@@ -221,6 +224,127 @@ std::vector<std::byte> make_ranged_checksummed_frame(uint8_t payload, uint8_t ta
   return upr_test_support::make_bytes({0x0A, payload, tail, static_cast<uint8_t>(payload ^ tail)});
 }
 
+constexpr std::string_view kVendorChecksumName = "vendor_sum_plus_one_20260405";
+
+uint64_t vendor_sum_plus_one(upr::ByteSpan bytes) noexcept {
+  return (upr::direct_decode_support::runtime_checksum_xor8(bytes) + 1U) & 0xFFU;
+}
+
+bool ensure_vendor_checksum_registered() {
+  static const bool kRegistered = []() {
+    if (upr::find_checksum_algorithm(kVendorChecksumName).ok()) {
+      return true;
+    }
+    return upr::register_checksum_algorithm({
+                                                .name = std::string(kVendorChecksumName),
+                                                .result_width_bytes = 1,
+                                                .function = vendor_sum_plus_one,
+                                            })
+        .ok();
+  }();
+  return kRegistered;
+}
+
+upr::CompiledProtocol make_builtin_checksum_protocol() {
+  upr::FieldDefinition sum16 = upr_test_support::make_scalar_field("checksum", upr::FieldKind::kUnsigned, 2);
+  upr_test_support::add_checksum(&sum16, "sum16");
+
+  upr::FieldDefinition crc16 = upr_test_support::make_scalar_field("checksum", upr::FieldKind::kUnsigned, 2);
+  upr_test_support::add_checksum(&crc16, "crc16_ccitt");
+
+  upr::FieldDefinition crc32 = upr_test_support::make_scalar_field("checksum", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::add_checksum(&crc32, "crc32");
+
+  upr::FieldDefinition crc32c = upr_test_support::make_scalar_field("checksum", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::add_checksum(&crc32c, "crc32c");
+
+  upr::FieldDefinition vendor = upr_test_support::make_scalar_field("checksum", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::add_checksum(&vendor, std::string(kVendorChecksumName));
+
+  return upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "checksum_dispatch",
+      {
+          upr_test_support::make_message(
+              "Sum16",
+              {
+                  upr_test_support::make_scalar_field(
+                      "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 0x11),
+                  upr_test_support::make_fixed_bytes_field("payload", 3),
+                  sum16,
+              }),
+          upr_test_support::make_message(
+              "Crc16",
+              {
+                  upr_test_support::make_scalar_field(
+                      "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 0x12),
+                  upr_test_support::make_fixed_bytes_field("payload", 3),
+                  crc16,
+              }),
+          upr_test_support::make_message(
+              "Crc32",
+              {
+                  upr_test_support::make_scalar_field(
+                      "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 0x13),
+                  upr_test_support::make_fixed_bytes_field("payload", 3),
+                  crc32,
+              }),
+          upr_test_support::make_message(
+              "Crc32c",
+              {
+                  upr_test_support::make_scalar_field(
+                      "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 0x14),
+                  upr_test_support::make_fixed_bytes_field("payload", 3),
+                  crc32c,
+              }),
+          upr_test_support::make_message(
+              "Vendor",
+              {
+                  upr_test_support::make_scalar_field(
+                      "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 0x15),
+                  upr_test_support::make_fixed_bytes_field("payload", 3),
+                  vendor,
+              }),
+      }));
+}
+
+std::vector<std::byte> make_builtin_checksum_frame(uint8_t message_type, std::string_view algorithm_name) {
+  std::vector<std::byte> frame;
+  upr_test_support::append_integral<uint8_t>(frame, message_type, upr::ByteOrder::kLittleEndian);
+  frame.push_back(std::byte{0x21});
+  frame.push_back(std::byte{0x43});
+  frame.push_back(std::byte{0x65});
+
+  const upr::ByteSpan checksum_input(frame);
+  if (algorithm_name == "sum16") {
+    upr_test_support::append_integral<uint16_t>(
+        frame,
+        static_cast<uint16_t>(upr::direct_decode_support::runtime_checksum_sum16(checksum_input)),
+        upr::ByteOrder::kLittleEndian);
+  } else if (algorithm_name == "crc16_ccitt") {
+    upr_test_support::append_integral<uint16_t>(
+        frame,
+        static_cast<uint16_t>(upr::direct_decode_support::checksum_crc16_ccitt(checksum_input)),
+        upr::ByteOrder::kLittleEndian);
+  } else if (algorithm_name == "crc32") {
+    upr_test_support::append_integral<uint32_t>(
+        frame,
+        static_cast<uint32_t>(upr::direct_decode_support::checksum_crc32(checksum_input)),
+        upr::ByteOrder::kLittleEndian);
+  } else if (algorithm_name == "crc32c") {
+    upr_test_support::append_integral<uint32_t>(
+        frame,
+        static_cast<uint32_t>(upr::direct_decode_support::checksum_crc32c(checksum_input)),
+        upr::ByteOrder::kLittleEndian);
+  } else {
+    upr_test_support::append_integral<uint8_t>(
+        frame,
+        static_cast<uint8_t>((upr::direct_decode_support::runtime_checksum_xor8(checksum_input) + 1U) & 0xFFU),
+        upr::ByteOrder::kLittleEndian);
+  }
+
+  return frame;
+}
+
 struct InvalidUtf8Case {
   std::string name;
   std::vector<std::byte> frame;
@@ -310,6 +434,30 @@ TEST(ProtocolDecoderTest, DecodesMixedFieldTypesAndSupportsAccessors) {
   EXPECT_EQ(message.get_bit<uint16_t>("kind"), 0x234U);
   ASSERT_TRUE(message.get_bit_enum_name("kind").has_value());
   EXPECT_EQ(*message.get_bit_enum_name("kind"), "Order");
+}
+
+TEST(ProtocolDecoderTest, SupportsResolvedMessageLayoutsAndFieldIdHotPathAccess) {
+  const upr::CompiledProtocol protocol = make_decoder_protocol();
+  const upr::CompiledMessage* metrics = protocol.find_message("Metrics");
+  ASSERT_NE(metrics, nullptr);
+
+  const auto small_unsigned = metrics->find_field("small_unsigned");
+  const auto last_price = metrics->find_field("float64_value");
+  const auto symbol = metrics->find_field("symbol");
+  ASSERT_TRUE(small_unsigned.has_value());
+  ASSERT_TRUE(last_price.has_value());
+  ASSERT_TRUE(symbol.has_value());
+
+  upr::ProtocolDecoder decoder(protocol);
+  const std::vector<std::byte> frame = make_metrics_frame();
+  upr::DecodedMessage message;
+
+  ASSERT_EQ(decoder.decode_as(*metrics, upr::ByteSpan(frame.data(), frame.size()), &message), upr::DecodeStatus::kOk);
+  EXPECT_EQ(message.get<uint8_t>(*small_unsigned), 42U);
+  ASSERT_TRUE(message.get<double>(*last_price).has_value());
+  EXPECT_DOUBLE_EQ(*message.get<double>(*last_price), -2.5);
+  ASSERT_TRUE(message.get_fixed_string<4>(*symbol).has_value());
+  EXPECT_EQ((*message.get_fixed_string<4>(*symbol))[1], 'B');
 }
 
 TEST(ProtocolDecoderTest, SupportsDynamicStringsChecksumsAndNestedStructViews) {
@@ -868,6 +1016,28 @@ TEST(ProtocolDecoderTest, ReturnsSchemaMismatchForMalformedCompiledChecksumAncho
 
   EXPECT_EQ(decoder.decode_as("BrokenChecksum", upr::ByteSpan(frame.data(), frame.size()), &message),
             upr::DecodeStatus::kSchemaMismatch);
+}
+
+TEST(ProtocolDecoderTest, DecodesMessagesWithBuiltInAndRegisteredChecksumAlgorithms) {
+  ASSERT_TRUE(ensure_vendor_checksum_registered());
+  const upr::CompiledProtocol protocol = make_builtin_checksum_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage message;
+
+  const std::array cases = {
+      std::pair{"Sum16", make_builtin_checksum_frame(0x11, "sum16")},
+      std::pair{"Crc16", make_builtin_checksum_frame(0x12, "crc16_ccitt")},
+      std::pair{"Crc32", make_builtin_checksum_frame(0x13, "crc32")},
+      std::pair{"Crc32c", make_builtin_checksum_frame(0x14, "crc32c")},
+      std::pair{"Vendor", make_builtin_checksum_frame(0x15, "vendor_sum_plus_one_20260405")},
+  };
+
+  for (const auto& [name, frame] : cases) {
+    ASSERT_EQ(decoder.decode_as(name, upr::ByteSpan(frame.data(), frame.size()), &message), upr::DecodeStatus::kOk)
+        << name;
+    ASSERT_TRUE(message.get_bytes("payload").has_value()) << name;
+    EXPECT_EQ(message.get_bytes("payload")->size(), 3U) << name;
+  }
 }
 
 TEST(ProtocolDecoderTest, ReportsFieldLimitExceededForOversizedManualProtocol) {

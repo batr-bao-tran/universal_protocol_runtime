@@ -74,12 +74,12 @@ struct CompiledField {
   uint64_t expected_unsigned = 0;
   std::vector<EnumValueDefinition> enum_values;
 
-  bool is_scalar() const {
+  constexpr bool is_scalar() const noexcept {
     return kind == FieldKind::kUnsigned || kind == FieldKind::kSigned || kind == FieldKind::kFloat32 ||
            kind == FieldKind::kFloat64 || kind == FieldKind::kEnum;
   }
 
-  size_t minimum_size_contribution() const {
+  constexpr size_t minimum_size_contribution() const noexcept {
     if (dynamic_size) {
       return 0;
     }

@@ -1,0 +1,55 @@
+protocol: benchmark_runtime
+messages:
+  - name: BlobEnvelope
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 1
+      - name: payload_length
+        type: uint16
+      - name: payload
+        type: bytes
+        size_from: payload_length
+      - name: checksum
+        type: uint8
+        checksum:
+          algorithm: xor8
+          from: frame_start
+          to: before_self
+  - name: MarketData
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 2
+      - name: instrument_id
+        type: uint32
+      - name: sequence
+        type: uint32
+      - name: exchange_time_ns
+        type: uint64
+      - name: receive_time_ns
+        type: uint64
+      - name: last_price
+        type: float64
+      - name: last_qty
+        type: uint32
+      - name: bid_qty
+        type: uint32
+      - name: ask_qty
+        type: uint32
+      - name: bid_price_micros
+        type: uint32
+      - name: ask_price_micros
+        type: uint32
+      - name: symbol
+        type: string
+        encoding: ascii
+        size: 8
+      - name: flags
+        type: uint8
+      - name: checksum
+        type: uint16
+        checksum:
+          algorithm: sum16
+          from: frame_start
+          to: before_self

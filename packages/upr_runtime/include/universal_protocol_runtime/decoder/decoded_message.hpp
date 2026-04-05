@@ -27,15 +27,15 @@ class DecodedMessage {
 
   ~DecodedMessage() noexcept = default;
 
-  bool valid() const { return message_ != nullptr; }
+  constexpr bool valid() const noexcept { return message_ != nullptr; }
 
   std::string_view message_name() const;
 
-  ByteSpan raw() const { return frame_; }
+  constexpr ByteSpan raw() const noexcept { return frame_; }
 
-  const CompiledProtocol* protocol() const { return protocol_; }
+  constexpr const CompiledProtocol* protocol() const noexcept { return protocol_; }
 
-  const CompiledMessage* schema() const { return message_; }
+  constexpr const CompiledMessage* schema() const noexcept { return message_; }
 
   std::optional<FieldId> field_id(std::string_view name) const;
 
@@ -173,7 +173,8 @@ class DecodedMessage {
   const CompiledField* field_definition(FieldId field_id) const;
   const CompiledBitField* bit_field_definition(BitFieldId bit_field_id) const;
   std::optional<ResolvedField> resolved_field(FieldId field_id) const;
-  std::optional<uint64_t> cached_container_unsigned(FieldId field_id) const;
+  std::optional<uint64_t> cached_scalar_raw(FieldId field_id) const;
+  void eager_cache_scalar(FieldId field_id, ByteSpan field_bytes);
   DecodeStatus assign_from_layout(const CompiledProtocol& protocol,
                                   const CompiledMessage& layout,
                                   ByteSpan frame,

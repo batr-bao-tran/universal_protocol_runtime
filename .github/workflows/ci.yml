@@ -67,7 +67,7 @@ jobs:
         env:
           BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
           BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
-        run: tools/ci/bazel_ci.sh build //...
+        run: tools/ci/bazel_ci.sh build --config=linux //...
 
       - name: Pack Bazel disk cache for downstream jobs
         run: |
@@ -169,4 +169,213 @@ jobs:
         env:
           BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
           BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
-        run: tools/ci/bazel_ci.sh test //... --test_output=errors
+        run: tools/ci/bazel_ci.sh test --config=linux //... --test_output=errors
+
+  lint:
+    needs: linux-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lint tools
+        run: |
+          LLVM_VERSION="$(tr -d '\n' < .llvm-version)"
+          sudo apt-get update
+          sudo apt-get install -y lld wget
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y "clang-tidy-${LLVM_VERSION}"
+
+      - name: Compute Bazel cache settings
+        id: bazel-cache
+        run: |
+          {
+            echo "disk_cache_dir=${RUNNER_TEMP}/bazel-disk-cache/ubuntu-24.04"
+            echo "repository_cache_dir=${RUNNER_TEMP}/bazel-repository-cache/ubuntu-24.04"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.0
+        with:
+          bazel_version: ${{ env.BAZEL_VERSION }}
+
+      - name: Download Bazel disk cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bazel-disk-cache-ubuntu-24.04-${{ github.sha }}
+          path: ${{ runner.temp }}
+
+      - name: Restore build job Bazel disk cache
+        run: |
+          rm -rf "${{ steps.bazel-cache.outputs.disk_cache_dir }}"
+          mkdir -p "${{ steps.bazel-cache.outputs.disk_cache_dir }}"
+          tar -xf "${RUNNER_TEMP}/bazel-disk-cache-ubuntu-24.04.tar" \
+            -C "${{ steps.bazel-cache.outputs.disk_cache_dir }}"
+
+      - name: Download Bazel repository cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bazel-repository-cache-ubuntu-24.04-${{ github.sha }}
+          path: ${{ runner.temp }}
+
+      - name: Restore build job Bazel repository cache
+        run: |
+          rm -rf "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          mkdir -p "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          tar -xf "${RUNNER_TEMP}/bazel-repository-cache-ubuntu-24.04.tar" \
+            -C "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+
+      - name: Build compile database inputs
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+        run: tools/ci/bazel_ci.sh build --config=linux //...
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run lint
+        run: pre-commit run --all-files
+
+  sanitize:
+    needs: linux-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sanitize toolchain
+        run: |
+          LLVM_VERSION="$(tr -d '\n' < .llvm-version)"
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "${LLVM_VERSION}"
+          sudo apt-get install -y \
+            "clang-${LLVM_VERSION}" \
+            "lld-${LLVM_VERSION}" \
+            "libclang-rt-${LLVM_VERSION}-dev"
+
+      - name: Compute Bazel cache settings
+        id: bazel-cache
+        run: |
+          {
+            echo "disk_cache_dir=${RUNNER_TEMP}/bazel-disk-cache/ubuntu-24.04-sanitize"
+            echo "disk_cache_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-sanitize-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-${{ github.sha }}"
+            echo "disk_restore_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-sanitize-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-"
+            echo "repository_cache_dir=${RUNNER_TEMP}/bazel-repository-cache/ubuntu-24.04"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.0
+        with:
+          bazel_version: ${{ env.BAZEL_VERSION }}
+
+      - name: Restore Bazel disk cache
+        id: restore-disk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+          restore-keys: |
+            ${{ steps.bazel-cache.outputs.disk_restore_key }}
+
+      - name: Download Bazel repository cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bazel-repository-cache-ubuntu-24.04-${{ github.sha }}
+          path: ${{ runner.temp }}
+
+      - name: Restore build job Bazel repository cache
+        run: |
+          rm -rf "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          mkdir -p "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          tar -xf "${RUNNER_TEMP}/bazel-repository-cache-ubuntu-24.04.tar" \
+            -C "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+
+      - name: Run sanitizer suite
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+        run: tools/testing/run_sanitizers.sh
+
+      - name: Save Bazel disk cache
+        if: steps.restore-disk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+
+  coverage:
+    needs: linux-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lld
+        run: sudo apt-get update && sudo apt-get install -y lld
+
+      - name: Compute Bazel cache settings
+        id: bazel-cache
+        run: |
+          {
+            echo "disk_cache_dir=${RUNNER_TEMP}/bazel-disk-cache/ubuntu-24.04-coverage"
+            echo "disk_cache_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-coverage-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-${{ github.sha }}"
+            echo "disk_restore_key=bazel-disk-${{ env.BAZEL_CACHE_VERSION }}-ubuntu-24.04-coverage-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel', 'MODULE.bazel.lock') }}-"
+            echo "repository_cache_dir=${RUNNER_TEMP}/bazel-repository-cache/ubuntu-24.04"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.8.0
+        with:
+          bazel_version: ${{ env.BAZEL_VERSION }}
+
+      - name: Restore Bazel disk cache
+        id: restore-disk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+          restore-keys: |
+            ${{ steps.bazel-cache.outputs.disk_restore_key }}
+
+      - name: Download Bazel repository cache artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bazel-repository-cache-ubuntu-24.04-${{ github.sha }}
+          path: ${{ runner.temp }}
+
+      - name: Restore build job Bazel repository cache
+        run: |
+          rm -rf "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          mkdir -p "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+          tar -xf "${RUNNER_TEMP}/bazel-repository-cache-ubuntu-24.04.tar" \
+            -C "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
+
+      - name: Run coverage
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
+        run: tools/testing/check_coverage.sh 97
+
+      - name: Save Bazel disk cache
+        if: steps.restore-disk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
+          key: ${{ steps.bazel-cache.outputs.disk_cache_key }}
+
+      - name: Export coverage report
+        run: cp "$(bazel info output_path)/_coverage/_coverage_report.dat" coverage-report.lcov
+
+      - name: Upload backend coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-report-lcov
+          path: coverage-report.lcov

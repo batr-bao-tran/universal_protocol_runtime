@@ -161,4 +161,29 @@ TEST(PosixSocketTransportTest, ReportsConnectionAndClosedSocketFailuresDefensive
   ASSERT_EQ(::close(sockets[1]), 0);
 }
 
+TEST(PosixSocketTransportTest, ReportsErrorsFromExternallyClosedSockets) {
+  std::array<int, 2> sockets = {-1, -1};
+  ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()), 0) << std::strerror(errno);
+
+  upr::PosixSocketTransport transport(sockets[0], {.own_handle = true, .non_blocking = false});
+  ASSERT_TRUE(transport.is_open());
+
+  ASSERT_EQ(::close(sockets[0]), 0);
+
+  std::array<std::byte, 1> buffer{};
+  const upr::ReadResult read_result = transport.read(buffer);
+  EXPECT_FALSE(read_result.status.ok());
+  EXPECT_EQ(read_result.status.code(), upr::StatusCode::kIoError);
+
+  const upr::StatusOr<bool> wait_result = transport.wait_until_readable(0);
+  ASSERT_TRUE(wait_result.ok()) << wait_result.status().message();
+  EXPECT_TRUE(wait_result.value());
+
+  const upr::Status close_status = transport.close();
+  EXPECT_FALSE(close_status.ok());
+  EXPECT_EQ(close_status.code(), upr::StatusCode::kIoError);
+
+  ASSERT_EQ(::close(sockets[1]), 0);
+}
+
 }  // namespace
