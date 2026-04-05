@@ -15,9 +15,12 @@ class ProtocolDecoder {
 
   ~ProtocolDecoder() noexcept = default;
 
+  constexpr const CompiledProtocol* protocol() const noexcept { return protocol_; }
+
   DecodeStatus decode_any(ByteSpan frame, DecodedMessage* message) const;
 
   DecodeStatus decode_as(std::string_view message_name, ByteSpan frame, DecodedMessage* message) const;
+  DecodeStatus decode_as(const CompiledMessage& compiled_message, ByteSpan frame, DecodedMessage* message) const;
 
  private:
   DecodeStatus decode_message(const CompiledMessage& compiled_message, ByteSpan frame, DecodedMessage* message) const;

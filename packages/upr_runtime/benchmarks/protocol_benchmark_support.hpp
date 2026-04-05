@@ -10,7 +10,9 @@
 namespace universal_protocol_runtime::benchmarks {
 
 enum class ProtocolKind {
-  KUpr,
+  KUprReflective,
+  KUprResolvedIds,
+  KUprStaticSchema,
   KPackedBinary,
   KProtobuf,
   KFlatbuffers,
@@ -23,7 +25,7 @@ enum class ScenarioKind {
 };
 
 struct BenchmarkCase {
-  ProtocolKind protocol = ProtocolKind::KUpr;
+  ProtocolKind protocol = ProtocolKind::KUprReflective;
   ScenarioKind scenario = ScenarioKind::KBlobSmall;
 };
 

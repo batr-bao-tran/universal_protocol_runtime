@@ -5,6 +5,7 @@
 
 namespace universal_protocol_runtime {
 
+// LCOV_EXCL_START
 [[noreturn]] inline void unreachable() noexcept {
 #if defined(_MSC_VER)
   __assume(false);
@@ -14,6 +15,7 @@ namespace universal_protocol_runtime {
   std::abort();
 #endif
 }
+// LCOV_EXCL_STOP
 
 }  // namespace universal_protocol_runtime
 

@@ -5,8 +5,6 @@
 #include <string>
 #include <string_view>
 
-#include "universal_protocol_runtime/core/unreachable.hpp"
-
 namespace universal_protocol_runtime {
 
 enum class ByteOrder {
@@ -42,17 +40,17 @@ inline constexpr size_t kBitsPerByte = 8U;
 inline constexpr size_t kMaxFieldsPerMessage = 64;
 inline constexpr size_t kMaxBitFieldsPerMessage = 64;
 
-inline std::string_view to_string(ByteOrder byte_order) {
+constexpr std::string_view to_string(ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
       return "little_endian";
     case ByteOrder::kBigEndian:
       return "big_endian";
   }
-  unreachable();
+  return "unknown";
 }
 
-inline std::string_view to_string(FieldKind kind) {
+constexpr std::string_view to_string(FieldKind kind) noexcept {
   switch (kind) {
     case FieldKind::kUnsigned:
       return "unsigned";
@@ -71,17 +69,17 @@ inline std::string_view to_string(FieldKind kind) {
     case FieldKind::kEnum:
       return "enum";
   }
-  unreachable();
+  return "unknown";
 }
 
-inline std::string_view to_string(StringEncoding encoding) {
+constexpr std::string_view to_string(StringEncoding encoding) noexcept {
   switch (encoding) {
     case StringEncoding::kAscii:
       return "ascii";
     case StringEncoding::kUtf8:
       return "utf8";
   }
-  unreachable();
+  return "unknown";
 }
 
 }  // namespace universal_protocol_runtime

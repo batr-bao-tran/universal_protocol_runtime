@@ -162,7 +162,7 @@ TEST(StreamRuntimeTest, ReturnsNeedMoreDataWhenTransportWouldBlock) {
   const upr::CompiledProtocol protocol = make_blob_protocol();
   upr::ProtocolDecoder decoder(protocol);
   AlwaysNeedMoreFramer framer;
-  ScriptedTransport transport({{
+  ScriptedTransport transport(std::vector<ScriptedTransport::Step>{{
       .bytes = {},
       .would_block = true,
   }});
@@ -179,7 +179,7 @@ TEST(StreamRuntimeTest, ReturnsTransportErrorWhenTransportFails) {
   const upr::CompiledProtocol protocol = make_blob_protocol();
   upr::ProtocolDecoder decoder(protocol);
   AlwaysNeedMoreFramer framer;
-  ScriptedTransport transport({{
+  ScriptedTransport transport(std::vector<ScriptedTransport::Step>{{
       .bytes = {},
       .status = upr::io_error("transport_failed"),
   }});
@@ -289,6 +289,22 @@ TEST(StreamRuntimeTest, ReturnsEndOfStreamForEmptyTransport) {
   EXPECT_EQ(result.status, upr::PollStatus::kEndOfStream);
 }
 
+TEST(StreamRuntimeTest, RemainsAtEndOfStreamAfterTransportIsDrained) {
+  const upr::CompiledProtocol protocol = make_blob_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  upr::LengthPrefixedFramer framer({
+      .prefix_width_bytes = 1,
+      .max_payload_size = 16,
+  });
+  const std::vector<std::byte> empty_bytes;
+  upr::SpanTransport transport(upr::ByteSpan(empty_bytes.data(), empty_bytes.size()));
+  upr::StreamRuntime<8> runtime(transport, framer, decoder);
+  upr::DecodedMessage message;
+
+  EXPECT_EQ(runtime.poll(&message).status, upr::PollStatus::kEndOfStream);
+  EXPECT_EQ(runtime.poll(&message).status, upr::PollStatus::kEndOfStream);
+}
+
 TEST(StreamRuntimeTest, AllowsPolicyOverridesPerRuntime) {
   const upr::CompiledProtocol protocol = make_blob_protocol();
   upr::ProtocolDecoder decoder(protocol);
@@ -316,7 +332,7 @@ TEST(StreamRuntimeTest, ReturnsWouldBlockForZeroByteReadWithoutFlags) {
   const upr::CompiledProtocol protocol = make_blob_protocol();
   upr::ProtocolDecoder decoder(protocol);
   AlwaysNeedMoreFramer framer;
-  ScriptedTransport transport({{
+  ScriptedTransport transport(std::vector<ScriptedTransport::Step>{{
       .bytes = {},
   }});
   upr::StreamRuntime<8> runtime(transport, framer, decoder);

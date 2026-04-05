@@ -16,6 +16,7 @@ UPR sits between packet inspection tools and schema-first serializers. It keeps 
 - Borrowed decoded message views with zero-copy field access on the hot path
 - Bitfields compiled as views over scalar container fields
 - Compiled checksum verification with built-in algorithms and vendor extension hooks
+- Architecture-specific runtime byte-span acceleration for large ASCII and UTF-8 validation plus built-in checksum passes, with scalar constexpr fallbacks retained for compile-time specialization and fallback builds
 - Borrowed string views for validated ASCII and UTF-8 fields
 - Reusable nested structs inside top-level messages
 - A bounded ring-buffer runtime for polling streams
@@ -43,7 +44,7 @@ flowchart LR
     end
 ```
 
-The repository now mirrors that split directly:
+The repository mirrors that split directly:
 
 - `packages/upr_core/` holds shared schema-neutral types.
 - `packages/upr_authoring/` owns the protocol definition language and YAML loading.
@@ -57,9 +58,9 @@ The repository now mirrors that split directly:
 
 Once the runtime is active, it only deals with bytes, framing, compiled schema metadata, and borrowed views.
 
-## Current Scope
+## Supported Capabilities
 
-The current repository covers the core authoring and runtime path:
+UPR covers the core authoring and runtime path:
 
 - Fixed-width unsigned, signed, floating-point, enum, `bytes`, and `string` fields
 - Dynamic `bytes` and `string` fields sized by an earlier field
@@ -75,15 +76,15 @@ The current repository covers the core authoring and runtime path:
 - HTML workbench rendering for authoring, compiled metadata, discovery results, and captured frames
 - Stream polling over a bounded ring buffer with explicit decode-error policy reporting
 
-The bundled runtime still includes the in-memory replay transport, and the adapters package now adds real POSIX file-descriptor and TCP socket transports behind the same `ITransport` interface.
+The runtime layer includes the in-memory replay transport, and the adapters package provides POSIX file-descriptor and TCP socket transports behind the same `ITransport` interface.
 
-## Future Additions
+## Extension Surfaces
 
-The remaining next capabilities are still intentionally outside the core authoring -> compilation -> runtime path:
+The following capabilities fit outside the core authoring -> compilation -> runtime path:
 
 - deeper protocol discovery heuristics such as checksum guessing, field segmentation, and replay-assisted clustering
 - broader hardware adapter coverage such as serial, CAN, USB, and vendor SDK integrations on top of the runtime transport abstraction
-- richer workbench editing, replay, and live-stream workflows on top of the current HTML report generator
+- richer workbench editing, replay, and live-stream workflows on top of the HTML report generator
 
 Generated bindings, discovery, real adapters, and the workbench all sit outside the runtime hot path and therefore do not change the fundamental split.
 
@@ -170,7 +171,13 @@ for (;;) {
 
 `poll()` is intentionally greedy: it keeps reading until it decodes a frame, hits a blocking boundary, reaches end-of-stream, or sees an error. On decode failure it returns the exact `DecodeStatus`, the frame bytes consumed, and the configured policy for that class of failure. For low-overhead hot loops, resolve `FieldId` and `BitFieldId` once and prefer id-based access over repeated string lookup.
 
-String fields are already zero-copy. `get_string_view()` borrows directly from the framed byte span, so copying into `std::array<char, N>` would usually be slower. If a caller wants a fixed-extent borrowed view for a known-width field, use `get_fixed_string<N>()` or `get_fixed_bytes<N>()`.
+String fields are zero-copy. `get_string_view()` borrows directly from the framed byte span, so copying into `std::array<char, N>` is usually slower. If a caller wants a fixed-extent borrowed view for a known-width field, use `get_fixed_string<N>()` or `get_fixed_bytes<N>()`.
+
+## Choosing An Access Mode
+
+- Use reflective `DecodedMessage` lookups when schemas are loaded dynamically, you are building tools, or field names matter more than raw throughput.
+- Use field-id access when the schema is known at runtime and the hot loop should avoid repeated string lookup without adding code generation.
+- Use generated C++ bindings when the schema is static and performance matters. For direct-decodable flat layouts, the generated `Value` path resolves byte order, scalar width, encoding checks, dispatch-prefix checks, and checksum selection at compile time, then parses straight from the frame into typed zero-copy views for `bytes` and `string` fields; large runtime ASCII and UTF-8 spans use `simdutf`, `crc32c`, and Highway-backed helpers behind the same UPR API, and layouts outside that specialized path fall back to the generic decoder.
 
 ## Build
 
@@ -196,4 +203,4 @@ For discovery and the workbench, use `discover_protocol_from_samples()` from `//
 
 ## Further Reading
 
-The design notes in [DESIGN.md](DESIGN.md) explain the architectural boundaries, runtime model, and intended direction of the project.
+The design notes in [DESIGN.md](DESIGN.md) explain the architectural boundaries, runtime model, and extension seams.

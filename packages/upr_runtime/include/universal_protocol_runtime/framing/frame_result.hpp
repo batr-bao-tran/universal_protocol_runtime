@@ -17,7 +17,7 @@ struct FrameSlice {
   size_t bytes_consumed = 0;
 };
 
-inline std::string_view to_string(FrameStatus status) {
+constexpr std::string_view to_string(FrameStatus status) noexcept {
   switch (status) {
     case FrameStatus::kReady:
       return "ready";
