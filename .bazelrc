@@ -7,6 +7,9 @@ build --host_action_env=PATH
 build --linkopt=-fuse-ld=lld
 build --host_linkopt=-fuse-ld=lld
 
+build:linux --linkopt=-fuse-ld=lld
+build:linux --host_linkopt=-fuse-ld=lld
+
 build --cxxopt=-Wall --cxxopt=-Wextra
 build --copt=-Wno-error=unused-parameter
 build --cxxopt=-Wno-error=unused-parameter

@@ -13,7 +13,23 @@ enum class DecodeStatus {
   kFieldLimitExceeded,
 };
 
-std::string_view to_string(DecodeStatus status);
+constexpr std::string_view to_string(DecodeStatus status) noexcept {
+  switch (status) {
+    case DecodeStatus::kOk:
+      return "ok";
+    case DecodeStatus::kMessageNotFound:
+      return "message_not_found";
+    case DecodeStatus::kSchemaMismatch:
+      return "schema_mismatch";
+    case DecodeStatus::kInvalidData:
+      return "invalid_data";
+    case DecodeStatus::kChecksumMismatch:
+      return "checksum_mismatch";
+    case DecodeStatus::kFieldLimitExceeded:
+      return "field_limit_exceeded";
+  }
+  return "unknown";
+}
 
 }  // namespace universal_protocol_runtime
 

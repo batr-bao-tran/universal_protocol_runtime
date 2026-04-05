@@ -9,9 +9,11 @@ namespace universal_protocol_runtime {
 using ByteSpan = std::span<const std::byte>;
 using MutableByteSpan = std::span<std::byte>;
 
-inline ByteSpan as_byte_span(std::span<const uint8_t> bytes) { return std::as_bytes(bytes); }
+inline ByteSpan as_byte_span(std::span<const uint8_t> bytes) noexcept { return std::as_bytes(bytes); }
 
-inline MutableByteSpan as_writable_byte_span(std::span<uint8_t> bytes) { return std::as_writable_bytes(bytes); }
+inline MutableByteSpan as_writable_byte_span(std::span<uint8_t> bytes) noexcept {
+  return std::as_writable_bytes(bytes);
+}
 
 }  // namespace universal_protocol_runtime
 

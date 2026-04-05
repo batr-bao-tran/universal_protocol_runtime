@@ -126,4 +126,29 @@ TEST(PosixFdTransportTest, ReportsClosedHandlesAndOpenFailuresDefensively) {
   ASSERT_EQ(::close(pipe_fds[1]), 0);
 }
 
+TEST(PosixFdTransportTest, ReportsErrorsFromExternallyClosedDescriptors) {
+  std::array<int, 2> pipe_fds = {-1, -1};
+  ASSERT_EQ(::pipe(pipe_fds.data()), 0) << std::strerror(errno);
+
+  upr::PosixFdTransport transport(pipe_fds[0], {.own_handle = true, .non_blocking = false});
+  ASSERT_TRUE(transport.is_open());
+
+  ASSERT_EQ(::close(pipe_fds[0]), 0);
+
+  std::array<std::byte, 1> buffer{};
+  const upr::ReadResult read_result = transport.read(buffer);
+  EXPECT_FALSE(read_result.status.ok());
+  EXPECT_EQ(read_result.status.code(), upr::StatusCode::kIoError);
+
+  const upr::StatusOr<bool> wait_result = transport.wait_until_readable(0);
+  ASSERT_TRUE(wait_result.ok()) << wait_result.status().message();
+  EXPECT_TRUE(wait_result.value());
+
+  const upr::Status close_status = transport.close();
+  EXPECT_FALSE(close_status.ok());
+  EXPECT_EQ(close_status.code(), upr::StatusCode::kIoError);
+
+  ASSERT_EQ(::close(pipe_fds[1]), 0);
+}
+
 }  // namespace

@@ -3,12 +3,14 @@
 #include <flatbuffers/flatbuffer_builder.h>
 #include <flatbuffers/verifier.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -22,12 +24,13 @@
 #include "packages/upr_runtime/benchmark_blob_envelope_generated.h"
 #include "packages/upr_runtime/benchmark_market_data_generated.h"
 #include "packages/upr_runtime/benchmarks/benchmark_messages.pb.h"
+#include "packages/upr_runtime/benchmarks/upr_benchmark_generated.hpp"
 #include "universal_protocol_runtime/compiler/schema_compiler.hpp"
 #include "universal_protocol_runtime/core/byte_view.hpp"
 #include "universal_protocol_runtime/core/unreachable.hpp"
 #include "universal_protocol_runtime/decoder/decoded_message.hpp"
 #include "universal_protocol_runtime/decoder/protocol_decoder.hpp"
-#include "universal_protocol_runtime/pdl/protocol_definition.hpp"
+#include "universal_protocol_runtime/pdl/yaml_loader.hpp"
 
 namespace flat = upr_benchmarks;
 namespace proto = upr_benchmarks_proto;
@@ -64,8 +67,10 @@ constexpr std::array<uint64_t, 16> kDatasetSeeds = {
     887U,
     953U,
 };
-constexpr std::array<ProtocolKind, 4> kProtocols = {
-    ProtocolKind::KUpr,
+constexpr std::array<ProtocolKind, 6> kProtocols = {
+    ProtocolKind::KUprReflective,
+    ProtocolKind::KUprResolvedIds,
+    ProtocolKind::KUprStaticSchema,
     ProtocolKind::KPackedBinary,
     ProtocolKind::KProtobuf,
     ProtocolKind::KFlatbuffers,
@@ -76,19 +81,59 @@ constexpr std::array<ScenarioKind, 3> kScenarios = {
     ScenarioKind::KMarketData,
 };
 constexpr std::array<BenchmarkCase, kProtocols.size() * kScenarios.size()> kBenchmarkCases = {
-    BenchmarkCase{.protocol = ProtocolKind::KUpr, .scenario = ScenarioKind::KBlobSmall},
+    BenchmarkCase{.protocol = ProtocolKind::KUprReflective, .scenario = ScenarioKind::KBlobSmall},
+    BenchmarkCase{.protocol = ProtocolKind::KUprResolvedIds, .scenario = ScenarioKind::KBlobSmall},
+    BenchmarkCase{.protocol = ProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KBlobSmall},
     BenchmarkCase{.protocol = ProtocolKind::KPackedBinary, .scenario = ScenarioKind::KBlobSmall},
     BenchmarkCase{.protocol = ProtocolKind::KProtobuf, .scenario = ScenarioKind::KBlobSmall},
     BenchmarkCase{.protocol = ProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KBlobSmall},
-    BenchmarkCase{.protocol = ProtocolKind::KUpr, .scenario = ScenarioKind::KBlobLarge},
+    BenchmarkCase{.protocol = ProtocolKind::KUprReflective, .scenario = ScenarioKind::KBlobLarge},
+    BenchmarkCase{.protocol = ProtocolKind::KUprResolvedIds, .scenario = ScenarioKind::KBlobLarge},
+    BenchmarkCase{.protocol = ProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KBlobLarge},
     BenchmarkCase{.protocol = ProtocolKind::KPackedBinary, .scenario = ScenarioKind::KBlobLarge},
     BenchmarkCase{.protocol = ProtocolKind::KProtobuf, .scenario = ScenarioKind::KBlobLarge},
     BenchmarkCase{.protocol = ProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KBlobLarge},
-    BenchmarkCase{.protocol = ProtocolKind::KUpr, .scenario = ScenarioKind::KMarketData},
+    BenchmarkCase{.protocol = ProtocolKind::KUprReflective, .scenario = ScenarioKind::KMarketData},
+    BenchmarkCase{.protocol = ProtocolKind::KUprResolvedIds, .scenario = ScenarioKind::KMarketData},
+    BenchmarkCase{.protocol = ProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KMarketData},
     BenchmarkCase{.protocol = ProtocolKind::KPackedBinary, .scenario = ScenarioKind::KMarketData},
     BenchmarkCase{.protocol = ProtocolKind::KProtobuf, .scenario = ScenarioKind::KMarketData},
     BenchmarkCase{.protocol = ProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KMarketData},
 };
+
+std::filesystem::path benchmark_schema_path() {
+  if (const char* runfiles_dir = std::getenv("RUNFILES_DIR")) {
+    return std::filesystem::path(runfiles_dir) / "_main" / "packages" / "upr_runtime" / "benchmarks" /
+           "benchmark_protocol.yaml";
+  }
+  if (const char* test_srcdir = std::getenv("TEST_SRCDIR")) {
+    return std::filesystem::path(test_srcdir) / "_main" / "packages" / "upr_runtime" / "benchmarks" /
+           "benchmark_protocol.yaml";
+  }
+  return std::filesystem::path("packages") / "upr_runtime" / "benchmarks" / "benchmark_protocol.yaml";
+}
+
+std::string_view scenario_protocol_name(ScenarioKind scenario) {
+  switch (scenario) {
+    case ScenarioKind::KBlobSmall:
+    case ScenarioKind::KBlobLarge:
+      return "benchmark_blob_envelope";
+    case ScenarioKind::KMarketData:
+      return "benchmark_market_data";
+  }
+  unreachable();
+}
+
+std::string_view scenario_message_name(ScenarioKind scenario) {
+  switch (scenario) {
+    case ScenarioKind::KBlobSmall:
+    case ScenarioKind::KBlobLarge:
+      return "BlobEnvelope";
+    case ScenarioKind::KMarketData:
+      return "MarketData";
+  }
+  unreachable();
+}
 
 struct BlobEnvelopeData {
   std::vector<std::byte> payload;
@@ -391,6 +436,24 @@ uint64_t fold_market_data(const MarketDataData& message) {
   return folded;
 }
 
+uint64_t fold_market_data(const generated::MarketData::Value& message) {
+  uint64_t folded = 0;
+  folded ^= static_cast<uint64_t>(message.instrument_id);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.sequence);
+  folded = (folded * 131U) ^ message.exchange_time_ns;
+  folded = (folded * 131U) ^ message.receive_time_ns;
+  folded = (folded * 131U) ^ std::bit_cast<uint64_t>(message.last_price);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.last_qty);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.bid_qty);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.ask_qty);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.bid_price_micros);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.ask_price_micros);
+  folded = fold_bytes(as_bytes(std::span(message.symbol.data(), message.symbol.size())), folded);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.flags);
+  folded = (folded * 131U) ^ static_cast<uint64_t>(message.checksum);
+  return folded;
+}
+
 uint64_t decode_binary_blob_frame(ByteSpan frame) {
   if (frame.size() < 1U + kBlobLengthWidthBytes + 1U) {
     std::cerr << "Invalid packed-binary blob frame.\n";
@@ -575,48 +638,176 @@ uint64_t decode_flatbuffers_market_data_frame(ByteSpan frame) {
   return fold_market_data(message);
 }
 
-uint64_t decode_upr_blob_frame(const ProtocolDecoder& decoder, ByteSpan frame) {
-  DecodedMessage decoded;
-  if (decoder.decode_any(frame, &decoded) != DecodeStatus::kOk) {
+struct BlobFieldAccessPlan {
+  const CompiledMessage* layout = nullptr;
+  FieldId payload = 0;
+  FieldId checksum = 0;
+};
+
+struct MarketDataFieldAccessPlan {
+  const CompiledMessage* layout = nullptr;
+  FieldId instrument_id = 0;
+  FieldId sequence = 0;
+  FieldId exchange_time_ns = 0;
+  FieldId receive_time_ns = 0;
+  FieldId last_price = 0;
+  FieldId last_qty = 0;
+  FieldId bid_qty = 0;
+  FieldId ask_qty = 0;
+  FieldId bid_price_micros = 0;
+  FieldId ask_price_micros = 0;
+  FieldId symbol = 0;
+  FieldId flags = 0;
+  FieldId checksum = 0;
+};
+
+BlobFieldAccessPlan make_blob_field_access_plan(const CompiledProtocol& protocol) {
+  const CompiledMessage* layout = protocol.find_message(generated::BlobEnvelope::kName);
+  if (layout == nullptr) {
+    std::cerr << "Benchmark blob layout missing.\n";
+    std::abort();
+  }
+  return BlobFieldAccessPlan{
+      .layout = layout,
+      .payload = generated::BlobEnvelope::Fields::kPayload,
+      .checksum = generated::BlobEnvelope::Fields::kChecksum,
+  };
+}
+
+MarketDataFieldAccessPlan make_market_data_field_access_plan(const CompiledProtocol& protocol) {
+  const CompiledMessage* layout = protocol.find_message(generated::MarketData::kName);
+  if (layout == nullptr) {
+    std::cerr << "Benchmark market-data layout missing.\n";
+    std::abort();
+  }
+  return MarketDataFieldAccessPlan{
+      .layout = layout,
+      .instrument_id = generated::MarketData::Fields::kInstrumentId,
+      .sequence = generated::MarketData::Fields::kSequence,
+      .exchange_time_ns = generated::MarketData::Fields::kExchangeTimeNs,
+      .receive_time_ns = generated::MarketData::Fields::kReceiveTimeNs,
+      .last_price = generated::MarketData::Fields::kLastPrice,
+      .last_qty = generated::MarketData::Fields::kLastQty,
+      .bid_qty = generated::MarketData::Fields::kBidQty,
+      .ask_qty = generated::MarketData::Fields::kAskQty,
+      .bid_price_micros = generated::MarketData::Fields::kBidPriceMicros,
+      .ask_price_micros = generated::MarketData::Fields::kAskPriceMicros,
+      .symbol = generated::MarketData::Fields::kSymbol,
+      .flags = generated::MarketData::Fields::kFlags,
+      .checksum = generated::MarketData::Fields::kChecksum,
+  };
+}
+
+uint64_t decode_upr_blob_frame_reflective(const ProtocolDecoder& decoder, ByteSpan frame, DecodedMessage* decoded) {
+  if (decoder.decode_any(frame, decoded) != DecodeStatus::kOk) {
     std::cerr << "UPR blob decode failed.\n";
     std::abort();
   }
 
-  const auto payload = decoded.get_bytes("payload");
+  const auto payload = decoded->get_bytes("payload");
   if (!payload.has_value()) {
     std::cerr << "UPR blob payload missing.\n";
     std::abort();
   }
-  return fold_bytes(*payload, decoded.get<uint8_t>("checksum").value_or(0U));
+  return fold_bytes(*payload, decoded->get<uint8_t>("checksum").value_or(0U));
 }
 
-uint64_t decode_upr_market_data_frame(const ProtocolDecoder& decoder, ByteSpan frame) {
-  DecodedMessage decoded;
-  if (decoder.decode_any(frame, &decoded) != DecodeStatus::kOk) {
+uint64_t decode_upr_blob_frame_field_ids(const ProtocolDecoder& decoder,
+                                         const BlobFieldAccessPlan& plan,
+                                         ByteSpan frame,
+                                         DecodedMessage* decoded) {
+  if (plan.layout == nullptr || decoder.decode_as(*plan.layout, frame, decoded) != DecodeStatus::kOk) {
+    std::cerr << "UPR blob decode failed.\n";
+    std::abort();
+  }
+  const auto payload = decoded->get_bytes(plan.payload);
+  if (!payload.has_value()) {
+    std::cerr << "UPR blob payload missing.\n";
+    std::abort();
+  }
+  return fold_bytes(*payload, decoded->get<uint8_t>(plan.checksum).value_or(0U));
+}
+
+uint64_t decode_upr_blob_frame_generated(ByteSpan frame) {
+  generated::BlobEnvelope::Value value;
+  if (universal_protocol_runtime::benchmarks::generated::BlobEnvelope::decode_value_direct(frame, &value) !=
+      DecodeStatus::kOk) {
+    std::cerr << "UPR generated blob decode failed.\n";
+    std::abort();
+  }
+  return fold_bytes(value.payload, value.checksum);
+}
+
+uint64_t decode_upr_market_data_frame_reflective(const ProtocolDecoder& decoder,
+                                                 ByteSpan frame,
+                                                 DecodedMessage* decoded) {
+  if (decoder.decode_any(frame, decoded) != DecodeStatus::kOk) {
     std::cerr << "UPR market-data decode failed.\n";
     std::abort();
   }
 
   MarketDataData message;
-  message.instrument_id = decoded.get<uint32_t>("instrument_id").value_or(0U);
-  message.sequence = decoded.get<uint32_t>("sequence").value_or(0U);
-  message.exchange_time_ns = decoded.get<uint64_t>("exchange_time_ns").value_or(0U);
-  message.receive_time_ns = decoded.get<uint64_t>("receive_time_ns").value_or(0U);
-  message.last_price = decoded.get<double>("last_price").value_or(0.0);
-  message.last_qty = decoded.get<uint32_t>("last_qty").value_or(0U);
-  message.bid_qty = decoded.get<uint32_t>("bid_qty").value_or(0U);
-  message.ask_qty = decoded.get<uint32_t>("ask_qty").value_or(0U);
-  message.bid_price_micros = decoded.get<uint32_t>("bid_price_micros").value_or(0U);
-  message.ask_price_micros = decoded.get<uint32_t>("ask_price_micros").value_or(0U);
-  const auto symbol = decoded.get_fixed_string<kMarketSymbolBytes>("symbol");
+  message.instrument_id = decoded->get<uint32_t>("instrument_id").value_or(0U);
+  message.sequence = decoded->get<uint32_t>("sequence").value_or(0U);
+  message.exchange_time_ns = decoded->get<uint64_t>("exchange_time_ns").value_or(0U);
+  message.receive_time_ns = decoded->get<uint64_t>("receive_time_ns").value_or(0U);
+  message.last_price = decoded->get<double>("last_price").value_or(0.0);
+  message.last_qty = decoded->get<uint32_t>("last_qty").value_or(0U);
+  message.bid_qty = decoded->get<uint32_t>("bid_qty").value_or(0U);
+  message.ask_qty = decoded->get<uint32_t>("ask_qty").value_or(0U);
+  message.bid_price_micros = decoded->get<uint32_t>("bid_price_micros").value_or(0U);
+  message.ask_price_micros = decoded->get<uint32_t>("ask_price_micros").value_or(0U);
+  const auto symbol = decoded->get_fixed_string<kMarketSymbolBytes>("symbol");
   if (!symbol.has_value()) {
     std::cerr << "UPR market-data symbol missing.\n";
     std::abort();
   }
   std::memcpy(message.symbol.data(), symbol->data(), kMarketSymbolBytes);
-  message.flags = decoded.get<uint8_t>("flags").value_or(0U);
-  message.checksum = decoded.get<uint16_t>("checksum").value_or(0U);
+  message.flags = decoded->get<uint8_t>("flags").value_or(0U);
+  message.checksum = decoded->get<uint16_t>("checksum").value_or(0U);
   return fold_market_data(message);
+}
+
+uint64_t decode_upr_market_data_frame_field_ids(const ProtocolDecoder& decoder,
+                                                const MarketDataFieldAccessPlan& plan,
+                                                ByteSpan frame,
+                                                DecodedMessage* decoded) {
+  if (plan.layout == nullptr || decoder.decode_as(*plan.layout, frame, decoded) != DecodeStatus::kOk) {
+    std::cerr << "UPR market-data decode failed.\n";
+    std::abort();
+  }
+
+  MarketDataData message;
+  message.instrument_id = decoded->get<uint32_t>(plan.instrument_id).value_or(0U);
+  message.sequence = decoded->get<uint32_t>(plan.sequence).value_or(0U);
+  message.exchange_time_ns = decoded->get<uint64_t>(plan.exchange_time_ns).value_or(0U);
+  message.receive_time_ns = decoded->get<uint64_t>(plan.receive_time_ns).value_or(0U);
+  message.last_price = decoded->get<double>(plan.last_price).value_or(0.0);
+  message.last_qty = decoded->get<uint32_t>(plan.last_qty).value_or(0U);
+  message.bid_qty = decoded->get<uint32_t>(plan.bid_qty).value_or(0U);
+  message.ask_qty = decoded->get<uint32_t>(plan.ask_qty).value_or(0U);
+  message.bid_price_micros = decoded->get<uint32_t>(plan.bid_price_micros).value_or(0U);
+  message.ask_price_micros = decoded->get<uint32_t>(plan.ask_price_micros).value_or(0U);
+  const auto symbol = decoded->get_fixed_string<kMarketSymbolBytes>(plan.symbol);
+  if (!symbol.has_value()) {
+    std::cerr << "UPR market-data symbol missing.\n";
+    std::abort();
+  }
+  std::memcpy(message.symbol.data(), symbol->data(), kMarketSymbolBytes);
+  message.flags = decoded->get<uint8_t>(plan.flags).value_or(0U);
+  message.checksum = decoded->get<uint16_t>(plan.checksum).value_or(0U);
+  return fold_market_data(message);
+}
+
+uint64_t decode_upr_market_data_frame_generated(ByteSpan frame) {
+  generated::MarketData::Value value;
+  if (universal_protocol_runtime::benchmarks::generated::MarketData::decode_value_direct(frame, &value) !=
+      DecodeStatus::kOk) {
+    std::cerr << "UPR generated market-data decode failed.\n";
+    std::abort();
+  }
+
+  return fold_market_data(value);
 }
 
 template <typename Decoder>
@@ -642,140 +833,45 @@ uint64_t decode_length_prefixed_stream(const CorpusBundle& corpus, Decoder&& dec
   return folded;
 }
 
-ProtocolDefinition make_upr_blob_protocol_definition() {
-  FieldDefinition message_type;
-  message_type.name = "message_type";
-  message_type.kind = FieldKind::kUnsigned;
-  message_type.width_bytes = 1;
-  message_type.byte_order = ByteOrder::kLittleEndian;
-  message_type.has_expected_unsigned = true;
-  message_type.expected_unsigned = kBlobMessageType;
-
-  FieldDefinition payload_length;
-  payload_length.name = "payload_length";
-  payload_length.kind = FieldKind::kUnsigned;
-  payload_length.width_bytes = kBlobLengthWidthBytes;
-  payload_length.byte_order = ByteOrder::kLittleEndian;
-
-  FieldDefinition payload;
-  payload.name = "payload";
-  payload.kind = FieldKind::kBytes;
-  payload.size_from_field = "payload_length";
-
-  FieldDefinition checksum;
-  checksum.name = "checksum";
-  checksum.kind = FieldKind::kUnsigned;
-  checksum.width_bytes = 1;
-  checksum.byte_order = ByteOrder::kLittleEndian;
-  checksum.checksum = ChecksumDefinition{
-      .algorithm = "xor8",
-      .from = "frame_start",
-      .to = "before_self",
-  };
-
-  MessageDefinition message;
-  message.name = "BlobEnvelope";
-  message.fields = {message_type, payload_length, payload, checksum};
-
-  ProtocolDefinition protocol;
-  protocol.name = "benchmark_blob_envelope";
-  protocol.messages = {message};
-  return protocol;
-}
-
-ProtocolDefinition make_upr_market_data_protocol_definition() {
-  FieldDefinition message_type;
-  message_type.name = "message_type";
-  message_type.kind = FieldKind::kUnsigned;
-  message_type.width_bytes = 1;
-  message_type.byte_order = ByteOrder::kLittleEndian;
-  message_type.has_expected_unsigned = true;
-  message_type.expected_unsigned = kMarketDataMessageType;
-
-  auto make_u32 = [](std::string name) {
-    FieldDefinition field;
-    field.name = std::move(name);
-    field.kind = FieldKind::kUnsigned;
-    field.width_bytes = sizeof(uint32_t);
-    field.byte_order = ByteOrder::kLittleEndian;
-    return field;
-  };
-  auto make_u64 = [](std::string name) {
-    FieldDefinition field;
-    field.name = std::move(name);
-    field.kind = FieldKind::kUnsigned;
-    field.width_bytes = sizeof(uint64_t);
-    field.byte_order = ByteOrder::kLittleEndian;
-    return field;
-  };
-
-  FieldDefinition last_price;
-  last_price.name = "last_price";
-  last_price.kind = FieldKind::kFloat64;
-  last_price.width_bytes = sizeof(double);
-  last_price.byte_order = ByteOrder::kLittleEndian;
-
-  FieldDefinition symbol;
-  symbol.name = "symbol";
-  symbol.kind = FieldKind::kString;
-  symbol.fixed_size = kMarketSymbolBytes;
-  symbol.string_encoding = StringEncoding::kAscii;
-
-  FieldDefinition flags;
-  flags.name = "flags";
-  flags.kind = FieldKind::kUnsigned;
-  flags.width_bytes = 1;
-  flags.byte_order = ByteOrder::kLittleEndian;
-
-  FieldDefinition checksum;
-  checksum.name = "checksum";
-  checksum.kind = FieldKind::kUnsigned;
-  checksum.width_bytes = kMarketChecksumWidthBytes;
-  checksum.byte_order = ByteOrder::kLittleEndian;
-  checksum.checksum = ChecksumDefinition{
-      .algorithm = "sum16",
-      .from = "frame_start",
-      .to = "before_self",
-  };
-
-  MessageDefinition message;
-  message.name = "MarketData";
-  message.fields = {
-      message_type,
-      make_u32("instrument_id"),
-      make_u32("sequence"),
-      make_u64("exchange_time_ns"),
-      make_u64("receive_time_ns"),
-      last_price,
-      make_u32("last_qty"),
-      make_u32("bid_qty"),
-      make_u32("ask_qty"),
-      make_u32("bid_price_micros"),
-      make_u32("ask_price_micros"),
-      symbol,
-      flags,
-      checksum,
-  };
-
-  ProtocolDefinition protocol;
-  protocol.name = "benchmark_market_data";
-  protocol.messages = {message};
-  return protocol;
-}
-
 const CompiledProtocol& upr_protocol(ScenarioKind scenario) {
+  static const ProtocolDefinition kBenchmarkDefinition = [] {
+    const std::filesystem::path schema_path = benchmark_schema_path();
+    auto definition = load_protocol_definition_from_file(schema_path.string());
+    if (!definition.ok()) {
+      std::cerr << "Failed to load benchmark protocol schema from " << schema_path << ": "
+                << definition.status().message() << '\n';
+      std::abort();
+    }
+    return definition.value();
+  }();
   static const CompiledProtocol kBlobProtocol = [] {
-    auto compiled = compile_protocol(make_upr_blob_protocol_definition());
+    ProtocolDefinition definition = kBenchmarkDefinition;
+    const std::string_view message_name = scenario_message_name(ScenarioKind::KBlobSmall);
+    definition.name = std::string(scenario_protocol_name(ScenarioKind::KBlobSmall));
+    definition.messages.erase(
+        std::remove_if(definition.messages.begin(),
+                       definition.messages.end(),
+                       [message_name](const MessageDefinition& message) { return message.name != message_name; }),
+        definition.messages.end());
+    auto compiled = compile_protocol(definition);
     if (!compiled.ok()) {
-      std::cerr << "Failed to compile blob benchmark protocol: " << compiled.status().message() << '\n';
+      std::cerr << "Failed to compile blob benchmark protocol schema: " << compiled.status().message() << '\n';
       std::abort();
     }
     return compiled.value();
   }();
   static const CompiledProtocol kMarketProtocol = [] {
-    auto compiled = compile_protocol(make_upr_market_data_protocol_definition());
+    ProtocolDefinition definition = kBenchmarkDefinition;
+    const std::string_view message_name = scenario_message_name(ScenarioKind::KMarketData);
+    definition.name = std::string(scenario_protocol_name(ScenarioKind::KMarketData));
+    definition.messages.erase(
+        std::remove_if(definition.messages.begin(),
+                       definition.messages.end(),
+                       [message_name](const MessageDefinition& message) { return message.name != message_name; }),
+        definition.messages.end());
+    auto compiled = compile_protocol(definition);
     if (!compiled.ok()) {
-      std::cerr << "Failed to compile market-data benchmark protocol: " << compiled.status().message() << '\n';
+      std::cerr << "Failed to compile market-data benchmark protocol schema: " << compiled.status().message() << '\n';
       std::abort();
     }
     return compiled.value();
@@ -800,7 +896,9 @@ CorpusBundle build_blob_corpus(size_t payload_bytes, size_t messages_per_seed, P
       const BlobEnvelopeData message = make_blob_message(seed, ordinal, payload_bytes);
       std::vector<std::byte> frame;
       switch (protocol) {
-        case ProtocolKind::KUpr:
+        case ProtocolKind::KUprReflective:
+        case ProtocolKind::KUprResolvedIds:
+        case ProtocolKind::KUprStaticSchema:
         case ProtocolKind::KPackedBinary:
           frame = encode_binary_blob_frame(message);
           break;
@@ -827,7 +925,9 @@ CorpusBundle build_market_data_corpus(size_t messages_per_seed, ProtocolKind pro
       const MarketDataData message = make_market_data_message(seed, ordinal);
       std::vector<std::byte> frame;
       switch (protocol) {
-        case ProtocolKind::KUpr:
+        case ProtocolKind::KUprReflective:
+        case ProtocolKind::KUprResolvedIds:
+        case ProtocolKind::KUprStaticSchema:
         case ProtocolKind::KPackedBinary:
           frame = encode_binary_market_data_frame(message);
           break;
@@ -847,14 +947,18 @@ CorpusBundle build_market_data_corpus(size_t messages_per_seed, ProtocolKind pro
 
 size_t protocol_index(ProtocolKind protocol) {
   switch (protocol) {
-    case ProtocolKind::KUpr:
+    case ProtocolKind::KUprReflective:
       return 0U;
-    case ProtocolKind::KPackedBinary:
+    case ProtocolKind::KUprResolvedIds:
       return 1U;
-    case ProtocolKind::KProtobuf:
+    case ProtocolKind::KUprStaticSchema:
       return 2U;
-    case ProtocolKind::KFlatbuffers:
+    case ProtocolKind::KPackedBinary:
       return 3U;
+    case ProtocolKind::KProtobuf:
+      return 4U;
+    case ProtocolKind::KFlatbuffers:
+      return 5U;
   }
   unreachable();
 }
@@ -891,20 +995,71 @@ const CorpusBundle& corpus_bundle(const BenchmarkCase& benchmark_case) {
   return corpus_bundles()[protocol_index(benchmark_case.protocol)][scenario_index(benchmark_case.scenario)];
 }
 
-std::function<uint64_t()> make_upr_runner(ScenarioKind scenario, const CorpusBundle* corpus) {
-  ProtocolDecoder decoder(upr_protocol(scenario));
+std::function<uint64_t()> make_upr_runner(ProtocolKind protocol_kind,
+                                          ScenarioKind scenario,
+                                          const CorpusBundle* corpus) {
+  const CompiledProtocol& protocol = upr_protocol(scenario);
+  ProtocolDecoder decoder(protocol);
   switch (scenario) {
     case ScenarioKind::KBlobSmall:
     case ScenarioKind::KBlobLarge:
-      return [corpus, decoder]() {
-        return decode_length_prefixed_stream(
-            *corpus, [&decoder](ByteSpan frame) { return decode_upr_blob_frame(decoder, frame); });
-      };
+      switch (protocol_kind) {
+        case ProtocolKind::KUprReflective:
+          return [corpus, decoder]() mutable {
+            DecodedMessage decoded;
+            return decode_length_prefixed_stream(*corpus, [&decoder, &decoded](ByteSpan frame) {
+              return decode_upr_blob_frame_reflective(decoder, frame, &decoded);
+            });
+          };
+        case ProtocolKind::KUprResolvedIds: {
+          const BlobFieldAccessPlan plan = make_blob_field_access_plan(protocol);
+          return [corpus, decoder, plan]() mutable {
+            DecodedMessage decoded;
+            return decode_length_prefixed_stream(*corpus, [&decoder, &decoded, plan](ByteSpan frame) {
+              return decode_upr_blob_frame_field_ids(decoder, plan, frame, &decoded);
+            });
+          };
+        }
+        case ProtocolKind::KUprStaticSchema:
+          return [corpus]() mutable {
+            return decode_length_prefixed_stream(*corpus,
+                                                 [](ByteSpan frame) { return decode_upr_blob_frame_generated(frame); });
+          };
+        case ProtocolKind::KPackedBinary:
+        case ProtocolKind::KProtobuf:
+        case ProtocolKind::KFlatbuffers:
+          break;
+      }
+      break;
     case ScenarioKind::KMarketData:
-      return [corpus, decoder]() {
-        return decode_length_prefixed_stream(
-            *corpus, [&decoder](ByteSpan frame) { return decode_upr_market_data_frame(decoder, frame); });
-      };
+      switch (protocol_kind) {
+        case ProtocolKind::KUprReflective:
+          return [corpus, decoder]() mutable {
+            DecodedMessage decoded;
+            return decode_length_prefixed_stream(*corpus, [&decoder, &decoded](ByteSpan frame) {
+              return decode_upr_market_data_frame_reflective(decoder, frame, &decoded);
+            });
+          };
+        case ProtocolKind::KUprResolvedIds: {
+          const MarketDataFieldAccessPlan plan = make_market_data_field_access_plan(protocol);
+          return [corpus, decoder, plan]() mutable {
+            DecodedMessage decoded;
+            return decode_length_prefixed_stream(*corpus, [&decoder, &decoded, plan](ByteSpan frame) {
+              return decode_upr_market_data_frame_field_ids(decoder, plan, frame, &decoded);
+            });
+          };
+        }
+        case ProtocolKind::KUprStaticSchema:
+          return [corpus]() mutable {
+            return decode_length_prefixed_stream(
+                *corpus, [](ByteSpan frame) { return decode_upr_market_data_frame_generated(frame); });
+          };
+        case ProtocolKind::KPackedBinary:
+        case ProtocolKind::KProtobuf:
+        case ProtocolKind::KFlatbuffers:
+          break;
+      }
+      break;
   }
   unreachable();
 }
@@ -915,8 +1070,12 @@ std::span<const BenchmarkCase> benchmark_cases() { return kBenchmarkCases; }
 
 std::string_view to_string(ProtocolKind protocol) {
   switch (protocol) {
-    case ProtocolKind::KUpr:
-      return "upr";
+    case ProtocolKind::KUprReflective:
+      return "upr_reflective";
+    case ProtocolKind::KUprResolvedIds:
+      return "upr_resolved_ids";
+    case ProtocolKind::KUprStaticSchema:
+      return "upr_static_schema";
     case ProtocolKind::KPackedBinary:
       return "packed_binary";
     case ProtocolKind::KProtobuf:
@@ -944,8 +1103,10 @@ CorpusMetrics corpus_metrics(const BenchmarkCase& benchmark_case) {
 std::function<uint64_t()> make_decode_runner(const BenchmarkCase& benchmark_case) {
   const CorpusBundle* corpus = &corpus_bundle(benchmark_case);
   switch (benchmark_case.protocol) {
-    case ProtocolKind::KUpr:
-      return make_upr_runner(benchmark_case.scenario, corpus);
+    case ProtocolKind::KUprReflective:
+    case ProtocolKind::KUprResolvedIds:
+    case ProtocolKind::KUprStaticSchema:
+      return make_upr_runner(benchmark_case.protocol, benchmark_case.scenario, corpus);
     case ProtocolKind::KPackedBinary:
       switch (benchmark_case.scenario) {
         case ScenarioKind::KBlobSmall:
