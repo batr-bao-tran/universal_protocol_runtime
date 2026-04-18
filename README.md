@@ -1,206 +1,89 @@
 # Universal Protocol Runtime
 
-Universal Protocol Runtime (UPR) is a C++20 library for defining binary protocols once and running them against live or replayed byte streams. It is designed for systems that care about predictable latency, explicit protocol control, and a clean separation between authoring, compilation, runtime execution, and outer tooling.
+Universal Protocol Runtime (UPR) is a C++20 library for describing binary protocols and executing them against live or replayed byte streams. It is built for systems that need explicit control over protocol layout, predictable runtime behavior, and a clean separation between schema authoring and message decoding.
 
-UPR sits between packet inspection tools and schema-first serializers. It keeps the protocol description explicit, compiles that description into an immutable decode plan, and exposes decoded messages as borrowed views over the original bytes.
+## Why Use UPR
 
-## What UPR Provides
+- Define a protocol once and reuse it across tools, generated bindings, and runtime decoding.
+- Load human-readable schema definitions at runtime or compile them into immutable runtime metadata.
+- Decode messages as borrowed views over the original bytes instead of materializing copies by default.
+- Keep transport, framing, schema loading, compilation, and decoding as separate concerns so protocols remain portable across environments.
+- Support both dynamic runtime schema loading and static integration (C++ and Python bindings).
 
-- A YAML-based protocol definition language for binary message layouts
-- A schema compiler that validates definitions and produces immutable compiled protocols
-- Heuristic automatic protocol discovery that emits compileable draft schemas from sampled frames
-- Real POSIX file-descriptor and TCP socket transports for live devices and networks
-- Generated C++ headers and Python modules for static schema bindings
-- A self-contained graphical HTML workbench for protocol inspection and discovery review
-- Fixed-size and length-prefixed framing
-- Borrowed decoded message views with zero-copy field access on the hot path
-- Bitfields compiled as views over scalar container fields
-- Compiled checksum verification with built-in algorithms and vendor extension hooks
-- Architecture-specific runtime byte-span acceleration for large ASCII and UTF-8 validation plus built-in checksum passes, with scalar constexpr fallbacks retained for compile-time specialization and fallback builds
-- Borrowed string views for validated ASCII and UTF-8 fields
-- Reusable nested structs inside top-level messages
-- A bounded ring-buffer runtime for polling streams
-- A transport abstraction with a bundled in-memory replay transport for tests, replay, and offline runs
+## What The Repository Includes
 
-## Architecture
+- A schema authoring layer with `.upr` and YAML support, including runtime loading and pre-compilation
+- A schema compiler that validates definitions and produces compiled protocol metadata
+- A runtime for framing, decoding, and stream polling
+- Generated bindings for static C++ and Python integrations
+- Protocol discovery utilities for producing draft schemas from captured samples
+- POSIX transport adapters for file descriptors and sockets
+- An HTML workbench for inspection and review
 
-```mermaid
-flowchart LR
-    subgraph Authoring["Authoring"]
-        PDL["Protocol definition<br/>YAML"] --> LOAD["Authoring loaders"]
-    end
+## How It Works
 
-    subgraph Compilation["Compilation"]
-        LOAD --> COMPILER["Schema compiler"]
-        COMPILER --> PLAN["Compiled protocol<br/>decode plan + fingerprint"]
-    end
+UPR follows a simple flow:
 
-    subgraph Runtime["Runtime"]
-        TRANSPORT["Transport"] --> BUFFER["Byte buffer"]
-        BUFFER --> FRAMER["Framer"]
-        FRAMER --> DECODER["Decoder"]
-        PLAN --> DECODER
-        DECODER --> VIEW["Decoded message view"]
-    end
+1. Write a protocol definition.
+2. Load it directly at runtime for flexible decoding, or compile it into an immutable protocol description for the fastest path.
+3. Feed framed bytes into the decoder.
+4. Read decoded fields from borrowed message views.
+
+At runtime, the decoder can operate on loaded schema metadata or on compiled schema metadata. Pre-compiled and generated-schema modes are the lowest-overhead options when decode throughput matters most.
+
+## Example
+
+```text
+protocol market_data
+
+enum Side: uint8 { 1 = Buy, 2 = Sell }
+
+message Order {
+  message_type: uint8 = 1
+  symbol: ascii[4]
+  price: float32
+  quantity: uint32
+  side: Side
+}
 ```
-
-The repository mirrors that split directly:
-
-- `packages/upr_core/` holds shared schema-neutral types.
-- `packages/upr_authoring/` owns the protocol definition language and YAML loading.
-- `packages/upr_compiler/` validates definitions and produces immutable compiled protocols.
-- `packages/upr_runtime/` handles framing, transport, decoding, and stream polling.
-- `packages/upr_discovery/` turns sample frames into conservative draft protocol definitions.
-- `packages/upr_adapters/` provides concrete POSIX file-descriptor and socket transports.
-- `packages/upr_codegen/` generates C++ and Python schema bindings from compiled protocols.
-- `packages/upr_workbench/` renders a graphical HTML workbench for inspection and review.
-- `packages/universal_protocol_runtime/` is the umbrella facade that re-exports the layered packages.
-
-Once the runtime is active, it only deals with bytes, framing, compiled schema metadata, and borrowed views.
-
-## Supported Capabilities
-
-UPR covers the core authoring and runtime path:
-
-- Fixed-width unsigned, signed, floating-point, enum, `bytes`, and `string` fields
-- Dynamic `bytes` and `string` fields sized by an earlier field
-- Field-level constant assertions with `expect`
-- Reusable nested `structs`
-- Scalar-backed bitfields
-- Built-in checksum validation for `crc16_ccitt`, `crc32`, `crc32c`, `xor8`, and `sum16`
-- Schema fingerprinting and validation during compilation
-- Message decoding by compiled schema
-- Heuristic protocol discovery with cluster reports and compileable draft output
-- POSIX file-descriptor, socket-pair, and TCP client transports
-- Generated C++ schema headers and Python schema modules from compiled protocol metadata
-- HTML workbench rendering for authoring, compiled metadata, discovery results, and captured frames
-- Stream polling over a bounded ring buffer with explicit decode-error policy reporting
-
-The runtime layer includes the in-memory replay transport, and the adapters package provides POSIX file-descriptor and TCP socket transports behind the same `ITransport` interface.
-
-## Extension Surfaces
-
-The following capabilities fit outside the core authoring -> compilation -> runtime path:
-
-- deeper protocol discovery heuristics such as checksum guessing, field segmentation, and replay-assisted clustering
-- broader hardware adapter coverage such as serial, CAN, USB, and vendor SDK integrations on top of the runtime transport abstraction
-- richer workbench editing, replay, and live-stream workflows on top of the HTML report generator
-
-Generated bindings, discovery, real adapters, and the workbench all sit outside the runtime hot path and therefore do not change the fundamental split.
-
-## Example Protocol
-
-```yaml
-protocol: market_data
-messages:
-  - name: Order
-    fields:
-      - name: message_type
-        type: uint8
-        expect: 1
-      - name: header
-        type: uint16_be
-        bits:
-          - name: version
-            offset: 13
-            width: 3
-          - name: urgent
-            offset: 12
-            width: 1
-      - name: price
-        type: float32_le
-      - name: quantity
-        type: uint32_le
-      - name: side
-        type: enum
-        underlying: uint8
-        values:
-          1: Buy
-          2: Sell
-```
-
-## Example Usage
 
 ```cpp
 namespace upr = universal_protocol_runtime;
 
-const auto definition = upr::load_protocol_definition_from_yaml(yaml_text);
+const auto definition = upr::load_protocol_definition_from_file("examples/market_data.upr");
 const auto compiled = upr::compile_protocol(definition.value());
 
 upr::ProtocolDecoder decoder(compiled.value());
-const upr::CompiledMessage* order = compiled.value().find_message("Order");
-const upr::FieldId price_id = order->find_field("price").value();
-const upr::FieldId quantity_id = order->find_field("quantity").value();
-const upr::BitFieldId version_id = order->find_bit_field("version").value();
-
 upr::DecodedMessage message;
 const upr::DecodeStatus status =
     decoder.decode_as("Order", upr::ByteSpan(frame.data(), frame.size()), &message);
-if (status == upr::DecodeStatus::kOk) {
-  const float price = message.get<float>(price_id).value();
-  const uint32_t quantity = message.get<uint32_t>(quantity_id).value();
-  const uint8_t version = message.get_bit<uint8_t>(version_id).value();
-}
 ```
-
-For streaming inputs:
-
-```cpp
-upr::SpanTransport transport(byte_stream, 0);
-upr::LengthPrefixedFramer framer({.prefix_width_bytes = 2});
-upr::StreamRuntime<4096> runtime(transport, framer, decoder);
-
-upr::DecodedMessage message;
-for (;;) {
-  const upr::PollResult result = runtime.poll(&message);
-  if (result.status == upr::PollStatus::kMessageReady) {
-    handle(message);
-    continue;
-  }
-  if (result.status == upr::PollStatus::kNeedMoreData) {
-    wait_for_transport_readiness();  // epoll/select/serial event
-    continue;
-  }
-  if (result.status == upr::PollStatus::kDecodeError &&
-      result.policy == upr::DecodeFailurePolicy::kDropAndContinue) {
-    continue;
-  }
-  break;
-}
-```
-
-`poll()` is intentionally greedy: it keeps reading until it decodes a frame, hits a blocking boundary, reaches end-of-stream, or sees an error. On decode failure it returns the exact `DecodeStatus`, the frame bytes consumed, and the configured policy for that class of failure. For low-overhead hot loops, resolve `FieldId` and `BitFieldId` once and prefer id-based access over repeated string lookup.
-
-String fields are zero-copy. `get_string_view()` borrows directly from the framed byte span, so copying into `std::array<char, N>` is usually slower. If a caller wants a fixed-extent borrowed view for a known-width field, use `get_fixed_string<N>()` or `get_fixed_bytes<N>()`.
-
-## Choosing An Access Mode
-
-- Use reflective `DecodedMessage` lookups when schemas are loaded dynamically, you are building tools, or field names matter more than raw throughput.
-- Use field-id access when the schema is known at runtime and the hot loop should avoid repeated string lookup without adding code generation.
-- Use generated C++ bindings when the schema is static and performance matters. For direct-decodable flat layouts, the generated `Value` path resolves byte order, scalar width, encoding checks, dispatch-prefix checks, and checksum selection at compile time, then parses straight from the frame into typed zero-copy views for `bytes` and `string` fields; large runtime ASCII and UTF-8 spans use `simdutf`, `crc32c`, and Highway-backed helpers behind the same UPR API, and layouts outside that specialized path fall back to the generic decoder.
 
 ## Build
 
 ```bash
 bazel build //...
 bazel test //...
+```
+
+Run the example:
+
+```bash
 bazel run //examples:upr_demo
 ```
 
-To generate bindings in your own tooling, depend on `//packages/upr_codegen` and call `generate_cpp_bindings_header()` or `generate_python_bindings_module()` with a `CompiledProtocol`.
-
-For discovery and the workbench, use `discover_protocol_from_samples()` from `//packages/upr_discovery` and `render_workbench_html()` or `write_workbench_html_file()` from `//packages/upr_workbench`.
-
 ## Repository Layout
 
-- `packages/upr_core/`, `packages/upr_authoring/`, `packages/upr_compiler/`, and `packages/upr_runtime/` contain the layered implementation.
-- `packages/upr_discovery/`, `packages/upr_adapters/`, `packages/upr_codegen/`, and `packages/upr_workbench/` contain the outer tooling and integration layers.
-- `packages/upr_codegen/` contains generated binding support for C++ and Python.
-- `packages/universal_protocol_runtime/` provides the umbrella public facade.
-- `examples/` contains a small end-to-end demo.
-- `packages/utils/` contains shared utility types used across the repository.
-- `tools/` and `scripts/` provide the Bazel, clang-tidy, and CI helpers used across the repository.
+- `packages/upr_authoring` contains schema loading and authoring support.
+- `packages/upr_compiler` contains schema validation and compilation.
+- `packages/upr_runtime` contains framing, decoding, and stream runtime support.
+- `packages/upr_codegen` contains generated binding support.
+- `packages/upr_discovery` contains protocol discovery utilities.
+- `packages/upr_adapters` contains concrete transport adapters.
+- `packages/upr_workbench` contains HTML inspection tooling.
+- `packages/universal_protocol_runtime` provides the umbrella public interface.
 
 ## Further Reading
 
-The design notes in [DESIGN.md](DESIGN.md) explain the architectural boundaries, runtime model, and extension seams.
+[DESIGN.md](DESIGN.md) describes the high-level architecture and design goals.
+[schema/README.md](schema/README.md) contains the schema authoring instructions and supported constructs.

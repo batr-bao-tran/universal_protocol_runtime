@@ -129,6 +129,18 @@ inline upr::StructDefinition make_struct(std::string name, std::vector<upr::Fiel
   return definition;
 }
 
+inline upr::EnumDefinition make_enum_type(std::string name,
+                                          uint8_t width_bytes,
+                                          std::vector<upr::EnumValueDefinition> values,
+                                          upr::ByteOrder byte_order = upr::ByteOrder::kLittleEndian) {
+  upr::EnumDefinition definition;
+  definition.name = std::move(name);
+  definition.width_bytes = width_bytes;
+  definition.byte_order = byte_order;
+  definition.values = std::move(values);
+  return definition;
+}
+
 inline upr::MessageDefinition make_message(std::string name,
                                            std::vector<upr::FieldDefinition> fields,
                                            bool allow_trailing_bytes = false) {
@@ -141,9 +153,11 @@ inline upr::MessageDefinition make_message(std::string name,
 
 inline upr::ProtocolDefinition make_protocol(std::string name,
                                              std::vector<upr::MessageDefinition> messages,
-                                             std::vector<upr::StructDefinition> structs = {}) {
+                                             std::vector<upr::StructDefinition> structs = {},
+                                             std::vector<upr::EnumDefinition> enums = {}) {
   upr::ProtocolDefinition protocol;
   protocol.name = std::move(name);
+  protocol.enums = std::move(enums);
   protocol.structs = std::move(structs);
   protocol.messages = std::move(messages);
   return protocol;

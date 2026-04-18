@@ -10,6 +10,10 @@
 
 namespace universal_protocol_runtime {
 
+struct ImportDefinition {
+  std::string path;
+};
+
 struct BitFieldDefinition {
   std::string name;
   uint8_t offset_bits = 0;
@@ -22,6 +26,13 @@ struct ChecksumDefinition {
   std::string algorithm;
   std::string from = "frame_start";
   std::string to = "before_self";
+};
+
+struct EnumDefinition {
+  std::string name;
+  uint8_t width_bytes = 0;
+  ByteOrder byte_order = ByteOrder::kLittleEndian;
+  std::vector<EnumValueDefinition> values;
 };
 
 struct FieldDefinition {
@@ -55,6 +66,8 @@ struct MessageDefinition {
 
 struct ProtocolDefinition {
   std::string name;
+  std::vector<ImportDefinition> imports;
+  std::vector<EnumDefinition> enums;
   std::vector<StructDefinition> structs;
   std::vector<MessageDefinition> messages;
 };

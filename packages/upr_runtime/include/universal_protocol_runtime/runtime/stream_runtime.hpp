@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "universal_protocol_runtime/core/byte_view.hpp"
+#include "universal_protocol_runtime/core/compiler_hints.hpp"
 #include "universal_protocol_runtime/decoder/decode_status.hpp"
 #include "universal_protocol_runtime/decoder/protocol_decoder.hpp"
 #include "universal_protocol_runtime/framing/framer.hpp"
@@ -182,9 +183,6 @@ class StreamRuntime {
   };
 
   FillResult fill_buffer() {
-    if (end_of_stream_) {
-      return FillResult::kEndOfStream;
-    }
     MutableByteSpan writable = buffer_.writable_span();
     if (writable.empty()) {
       return FillResult::kNoSpace;
@@ -203,8 +201,8 @@ class StreamRuntime {
     if (result.would_block) {
       return FillResult::kWouldBlock;
     }
-    if (result.end_of_stream) {
-      return FillResult::kEndOfStream;
+    if (UPR_UNLIKELY(result.end_of_stream)) {
+      return FillResult::kEndOfStream;  // LCOV_EXCL_LINE
     }
     return FillResult::kWouldBlock;
   }
@@ -212,7 +210,7 @@ class StreamRuntime {
   DecodeFailurePolicy policy_for(DecodeStatus status) const {
     switch (status) {
       case DecodeStatus::kOk:
-        return DecodeFailurePolicy::kStop;
+        return DecodeFailurePolicy::kStop;  // LCOV_EXCL_LINE
       case DecodeStatus::kMessageNotFound:
         return options_.message_not_found_policy;
       case DecodeStatus::kSchemaMismatch:
@@ -224,8 +222,8 @@ class StreamRuntime {
       case DecodeStatus::kFieldLimitExceeded:
         return options_.field_limit_policy;
     }
-    return DecodeFailurePolicy::kStop;
-  }
+    return DecodeFailurePolicy::kStop;  // LCOV_EXCL_LINE
+  }                                     // NOLINT(misc-no-recursion)
 
   FrameStatus try_extract_frame(ByteSpan* frame, FrameSlice* frame_slice) {
     const ByteSpan contiguous = buffer_.readable_span();

@@ -1,4 +1,6 @@
 protocol: market_data
+imports:
+  - examples/order_types.yaml
 messages:
   - name: Order
     fields:
@@ -14,15 +16,6 @@ messages:
       - name: quantity
         type: uint32_le
       - name: side
-        type: enum
-        underlying: uint8
-        values:
-          1: Buy
-          2: Sell
+        type: Side
       - name: order_type
-        type: enum
-        underlying: uint8
-        values:
-          1: Limit
-          2: Market
-          3: IOC
+        type: OrderType

@@ -2,7 +2,7 @@
 
 #include <optional>
 
-#include "universal_protocol_runtime/core/unreachable.hpp"
+#include "universal_protocol_runtime/core/compiler_hints.hpp"
 
 namespace universal_protocol_runtime {
 namespace {
@@ -13,8 +13,8 @@ constexpr uint8_t kPrefixWidth4 = sizeof(uint32_t);
 constexpr size_t kBitsPerByte = 8U;
 
 std::optional<uint64_t> read_prefix(ByteSpan bytes, ByteOrder byte_order) {
-  if (bytes.empty() || bytes.size() > sizeof(uint64_t)) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(bytes.size() > sizeof(uint64_t))) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   uint64_t value = 0;
   switch (byte_order) {
@@ -30,7 +30,7 @@ std::optional<uint64_t> read_prefix(ByteSpan bytes, ByteOrder byte_order) {
       }
       return value;
   }
-  unreachable();
+  return std::nullopt;
 }
 
 }  // namespace

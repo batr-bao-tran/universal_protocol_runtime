@@ -66,7 +66,7 @@ cc_test(
     name = "benchmark_generated_header_test",
     srcs = ["benchmarks/benchmark_generated_header_test.cpp"],
     data = [
-        "benchmarks/benchmark_protocol.yaml",
+        "benchmarks/benchmark_protocol.upr",
         "benchmarks/upr_benchmark_generated.hpp",
     ],
     deps = [
@@ -80,7 +80,7 @@ cc_test(
 cc_binary(
     name = "runtime_benchmark",
     srcs = ["benchmarks/runtime_benchmark.cpp"],
-    data = ["benchmarks/benchmark_protocol.yaml"],
+    data = ["benchmarks/benchmark_protocol.upr"],
     deps = [
         ":protocol_benchmark_support",
         "@google_benchmark//:benchmark",

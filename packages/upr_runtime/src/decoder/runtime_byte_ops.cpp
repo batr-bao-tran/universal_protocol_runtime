@@ -8,7 +8,7 @@
 
 #ifndef HWY_DISABLED_TARGETS
 // Clang sanitizer builds trip over Highway's AVX-512 target matrix on this host/toolchain.
-// Keeping AVX2 and below still delivers the measured wins while preserving clean CI.
+// Keeping AVX2 and below for non-CI builds.
 #define HWY_DISABLED_TARGETS (HWY_AVX10_2 | HWY_AVX3_SPR | HWY_AVX3_ZEN4 | HWY_AVX3_DL | HWY_AVX3)
 #endif
 

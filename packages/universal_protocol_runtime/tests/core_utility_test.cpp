@@ -11,6 +11,7 @@
 #include "universal_protocol_runtime/compiler/compiled_protocol.hpp"
 #include "universal_protocol_runtime/core/byte_view.hpp"
 #include "universal_protocol_runtime/core/types.hpp"
+#include "universal_protocol_runtime/core/unreachable.hpp"
 #include "universal_protocol_runtime/decoder/protocol_decoder.hpp"
 #include "universal_protocol_runtime/framing/frame_result.hpp"
 #include "universal_protocol_runtime/runtime/stream_runtime.hpp"
@@ -173,6 +174,10 @@ TEST(CoreUtilityTest, BuildsStatusesThroughHelperFunctions) {
   EXPECT_EQ(decode.code(), upr::StatusCode::kDecodeError);
   EXPECT_EQ(io.code(), upr::StatusCode::kIoError);
   EXPECT_EQ(exhausted.code(), upr::StatusCode::kExhausted);
+}
+
+TEST(CoreUtilityTest, UnreachableTerminatesProcess) {
+  EXPECT_DEATH({ upr::unreachable(); }, ".*");
 }
 
 TEST(CoreUtilityTest, ReportsCompiledFieldSizeContributions) {

@@ -99,6 +99,31 @@ TEST(SchemaCompilerTest, CompilesProtocolsAndSupportsLookups) {
   EXPECT_EQ(nested->fields()[1].kind, upr::FieldKind::kStruct);
 }
 
+TEST(SchemaCompilerTest, ResolvesNamedEnumTypes) {
+  upr::ProtocolDefinition definition = upr_test_support::make_protocol(
+      "enum_protocol",
+      {
+          upr_test_support::make_message("Order",
+                                         {
+                                             upr_test_support::make_struct_field("side", "Side"),
+                                         }),
+      },
+      {},
+      {
+          upr_test_support::make_enum_type("Side", 1, {{.value = 1, .name = "Buy"}, {.value = 2, .name = "Sell"}}),
+      });
+
+  upr::StatusOr<upr::CompiledProtocol> compiled = upr::compile_protocol(definition);
+
+  ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+  const upr::CompiledMessage* order = compiled.value().find_message("Order");
+  ASSERT_NE(order, nullptr);
+  ASSERT_EQ(order->fields().size(), 1U);
+  EXPECT_EQ(order->fields()[0].kind, upr::FieldKind::kEnum);
+  ASSERT_EQ(order->fields()[0].enum_values.size(), 2U);
+  EXPECT_EQ(order->fields()[0].enum_values[1].name, "Sell");
+}
+
 TEST(SchemaCompilerTest, CompilesBigEndianDispatchPrefixesSignedBitfieldsAndChecksumAnchors) {
   upr::FieldDefinition kind = upr_test_support::make_scalar_field(
       "kind", upr::FieldKind::kUnsigned, 2, upr::ByteOrder::kBigEndian, true, 0xB234U);

@@ -1,0 +1,36 @@
+{
+  "Protocol": {
+    "prefix": "protocol",
+    "body": [
+      "protocol ${1:name}",
+      "",
+      "message ${2:Message} {",
+      "  ${3:message_type}: uint8 = ${4:1}",
+      "}"
+    ],
+    "description": "Create a new UPR protocol"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name}: ${2:uint8} { ${3:1} = ${4:Value} }"
+    ],
+    "description": "Create a named enum"
+  },
+  "Message": {
+    "prefix": "message",
+    "body": [
+      "message ${1:Name} {",
+      "  $0",
+      "}"
+    ],
+    "description": "Create a message block"
+  },
+  "Checksum Field": {
+    "prefix": "checksum",
+    "body": [
+      "${1:checksum}: ${2:uint16} checksum(${3:sum16})"
+    ],
+    "description": "Create a checksum field"
+  }
+}

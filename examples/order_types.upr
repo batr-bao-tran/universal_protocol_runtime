@@ -1,0 +1,2 @@
+enum Side: uint8 { 1 = Buy, 2 = Sell }
+enum OrderType: uint8 { 1 = Limit, 2 = Market, 3 = IOC }
