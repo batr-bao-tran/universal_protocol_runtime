@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -73,6 +74,31 @@ TEST_P(ValidYamlLoaderTest, ParsesSupportedFieldDefinitions) {
   if (field.checksum.has_value()) {
     EXPECT_EQ(field.checksum->algorithm, param.expected_checksum_algorithm);
   }
+}
+
+TEST(YamlLoaderTest, ParsesTopLevelEnums) {
+  const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: market_data
+enums:
+  - name: Side
+    underlying: uint8
+    values:
+      1: Buy
+      2: Sell
+messages:
+  - name: Order
+    fields:
+      - name: side
+        type: Side
+)yaml");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().enums.size(), 1U);
+  EXPECT_EQ(definition.value().enums[0].name, "Side");
+  EXPECT_EQ(definition.value().enums[0].width_bytes, 1);
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  ASSERT_EQ(definition.value().messages[0].fields.size(), 1U);
+  EXPECT_EQ(definition.value().messages[0].fields[0].referenced_type, "Side");
 }
 
 INSTANTIATE_TEST_SUITE_P(Coverage,
@@ -626,6 +652,131 @@ messages:
         type: uint8
 )yaml",
                                  .expected_message_substring = "Every struct requires a 'fields' sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "imports_must_be_sequence",
+                                 .yaml = R"yaml(
+protocol: sample
+imports: {}
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Protocol YAML field 'imports' must be a sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enums_must_be_sequence",
+                                 .yaml = R"yaml(
+protocol: sample
+enums: {}
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Protocol YAML field 'enums' must be a sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_requires_name",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - underlying: uint8
+    values:
+      1: Ready
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Every enum requires 'name'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_declaration_requires_unsigned_underlying",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - name: Side
+    underlying: int8
+    values:
+      1: Ready
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Enum underlying type must be an unsigned scalar",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_declaration_invalid_underlying_width",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - name: Side
+    underlying: uintx
+    values:
+      1: Ready
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Invalid scalar width token",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_declaration_requires_width_or_underlying",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - name: Side
+    values:
+      1: Ready
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Enum declarations require 'underlying' or 'width'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_declaration_invalid_endianness",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - name: Side
+    width: 1
+    endianness: middle
+    values:
+      1: Ready
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Unsupported endianness",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_declaration_requires_values_mapping",
+                                 .yaml = R"yaml(
+protocol: sample
+enums:
+  - name: Side
+    width: 1
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Enum declarations require a 'values' mapping",
                              }),
                          [](const ::testing::TestParamInfo<InvalidYamlCase>& info) { return info.param.name; });
 
@@ -648,6 +799,78 @@ messages:
   ASSERT_TRUE(definition.ok()) << definition.status().message();
   EXPECT_EQ(definition.value().name, "file_protocol");
   std::remove(path.c_str());
+}
+
+TEST(YamlLoaderTest, LoadsYmlDefinitionWhenImportResolutionDisabled) {
+  const std::string path = "/tmp/upr_yaml_loader_test.yml";
+  {
+    std::ofstream output(path);
+    output << R"yaml(
+protocol: yml_protocol
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml";
+  }
+
+  upr::SchemaLoadOptions options;
+  options.resolve_imports = false;
+  upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_file(path, options);
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  EXPECT_EQ(definition.value().name, "yml_protocol");
+  std::remove(path.c_str());
+}
+
+TEST(YamlLoaderTest, ResolvesImportedYamlSchemasFromFile) {
+  const std::filesystem::path root_dir = std::filesystem::path("/tmp") / "upr_yaml_loader_imports";
+  const std::filesystem::path types_dir = root_dir / "types";
+  const std::filesystem::path orders_dir = root_dir / "orders";
+  std::filesystem::create_directories(types_dir);
+  std::filesystem::create_directories(orders_dir);
+
+  {
+    std::ofstream output(types_dir / "shared.yaml");
+    ASSERT_TRUE(output.is_open());
+    output << R"yaml(
+enums:
+  - name: Side
+    underlying: uint8
+    values:
+      1: Buy
+      2: Sell
+)yaml";
+  }
+
+  {
+    std::ofstream output(orders_dir / "market_data.yaml");
+    ASSERT_TRUE(output.is_open());
+    output << R"yaml(
+protocol: market_data
+imports:
+  - ../types/shared.yaml
+messages:
+  - name: Order
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 1
+      - name: side
+        type: Side
+)yaml";
+  }
+
+  upr::StatusOr<upr::ProtocolDefinition> definition =
+      upr::load_protocol_definition_from_file((orders_dir / "market_data.yaml").string());
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  EXPECT_TRUE(definition.value().imports.empty());
+  ASSERT_EQ(definition.value().enums.size(), 1U);
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+
+  std::filesystem::remove_all(root_dir);
 }
 
 TEST(YamlLoaderTest, ReturnsIoErrorWhenFileCannotBeOpened) {

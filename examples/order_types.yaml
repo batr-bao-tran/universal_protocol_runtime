@@ -1,0 +1,12 @@
+enums:
+  - name: Side
+    underlying: uint8
+    values:
+      1: Buy
+      2: Sell
+  - name: OrderType
+    underlying: uint8
+    values:
+      1: Limit
+      2: Market
+      3: IOC

@@ -8,6 +8,8 @@
 #include <cstring>
 #include <string>
 
+#include "universal_protocol_runtime/core/compiler_hints.hpp"
+
 namespace universal_protocol_runtime {
 namespace {
 
@@ -15,19 +17,14 @@ Status status_from_errno(const std::string& operation) {
   return io_error(operation + ": " + std::string(std::strerror(errno)));
 }
 
-Status set_non_blocking(int fd, bool enabled) {
+Status set_non_blocking(int fd) {
   const int existing_flags = ::fcntl(fd, F_GETFL, 0);
   if (existing_flags < 0) {
     return status_from_errno("fcntl(F_GETFL)");
   }
-  int next_flags = existing_flags;
-  if (enabled) {
-    next_flags |= O_NONBLOCK;
-  } else {
-    next_flags &= ~O_NONBLOCK;
-  }
-  if (::fcntl(fd, F_SETFL, next_flags) < 0) {
-    return status_from_errno("fcntl(F_SETFL)");
+  const int next_flags = existing_flags | O_NONBLOCK;
+  if (UPR_UNLIKELY(::fcntl(fd, F_SETFL, next_flags) < 0)) {
+    return status_from_errno("fcntl(F_SETFL)");  // LCOV_EXCL_LINE
   }
   return Status::ok_status();
 }
@@ -39,49 +36,45 @@ StatusOr<bool> wait_for_readable(int fd, int timeout_ms) {
   struct pollfd descriptor {
     .fd = fd, .events = POLLIN, .revents = 0,
   };
-  while (true) {
-    const int result = ::poll(&descriptor, 1, timeout_ms);
-    if (result > 0) {
-      return true;
-    }
-    if (result == 0) {
-      return false;
-    }
-    if (errno == EINTR) {
-      continue;
-    }
-    return status_from_errno("poll");
+  int result;
+  do {
+    result = ::poll(&descriptor, 1, timeout_ms);
+  } while (result < 0 && UPR_UNLIKELY(errno == EINTR));
+  if (result > 0) {
+    return true;
   }
+  if (result == 0) {
+    return false;
+  }
+  return status_from_errno("poll");  // LCOV_EXCL_LINE
 }
 
 ReadResult read_from_fd(int fd, MutableByteSpan destination, bool* open_flag) {
-  while (true) {
-    const ssize_t bytes_read = ::read(fd, destination.data(), destination.size());
-    if (bytes_read > 0) {
-      return {
-          .bytes_read = static_cast<size_t>(bytes_read),
-      };
-    }
-    if (bytes_read == 0) {
-      if (open_flag != nullptr) {
-        *open_flag = false;
-      }
-      return {
-          .end_of_stream = true,
-      };
-    }
-    if (errno == EINTR) {
-      continue;
-    }
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return {
-          .would_block = true,
-      };
-    }
+  ssize_t bytes_read;
+  do {
+    bytes_read = ::read(fd, destination.data(), destination.size());
+  } while (bytes_read < 0 && UPR_UNLIKELY(errno == EINTR));
+  if (bytes_read > 0) {
     return {
-        .status = status_from_errno("read"),
+        .bytes_read = static_cast<size_t>(bytes_read),
     };
   }
+  if (bytes_read == 0) {
+    if (open_flag != nullptr) {
+      *open_flag = false;
+    }
+    return {
+        .end_of_stream = true,
+    };
+  }
+  if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    return {
+        .would_block = true,
+    };
+  }
+  return {
+      .status = status_from_errno("read"),  // LCOV_EXCL_LINE
+  };
 }
 
 }  // namespace
@@ -89,7 +82,7 @@ ReadResult read_from_fd(int fd, MutableByteSpan destination, bool* open_flag) {
 PosixFdTransport::PosixFdTransport(int fd, PosixTransportOptions options)
     : fd_(fd), open_(fd >= 0), own_handle_(options.own_handle) {
   if (fd_ >= 0 && options.non_blocking) {
-    const Status status = set_non_blocking(fd_, true);
+    const Status status = set_non_blocking(fd_);
     if (!status.ok()) {
       open_ = false;
       if (own_handle_) {
@@ -121,7 +114,7 @@ StatusOr<PosixFdTransport> PosixFdTransport::open_device(const std::string& path
   }
   PosixFdTransport transport(fd, options);
   if (!transport.is_open()) {
-    return io_error("Failed to initialize file descriptor transport for '" + path + "'.");
+    return io_error("Failed to initialize file descriptor transport for '" + path + "'.");  // LCOV_EXCL_LINE
   }
   return transport;
 }

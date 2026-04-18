@@ -175,4 +175,25 @@ TEST(ProtocolDiscoveryTest, ReportsCompilationFailuresForOversizedDraftMessages)
   EXPECT_NE(std::string(report.status().message()).find("did not compile cleanly"), std::string::npos);
 }
 
+TEST(ProtocolDiscoveryTest, ExercisesLengthFieldSearchFailurePaths) {
+  const std::vector<std::vector<std::byte>> frames = {
+      make_frame({0x44, 0x10, 0x20}),
+      make_frame({0x44, 0x11, 0x21, 0x31}),
+      make_frame({0x44, 0x12, 0x22, 0x32, 0x42}),
+  };
+
+  upr::StatusOr<upr::DiscoveryReport> report =
+      upr::discover_protocol_from_samples(frames,
+                                          {
+                                              .protocol_name = "search_failures",
+                                              .max_common_prefix_bytes = 1,
+                                              .max_length_field_width_bytes = 4,
+                                          });
+
+  ASSERT_TRUE(report.ok()) << report.status().message();
+  ASSERT_EQ(report.value().messages.size(), 1U);
+  EXPECT_FALSE(report.value().messages.front().inferred_length_field.has_value());
+  EXPECT_TRUE(report.value().messages.front().allow_trailing_bytes);
+}
+
 }  // namespace

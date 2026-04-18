@@ -76,6 +76,15 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_consumed = 5,
         },
         LengthPrefixedCase{
+            .name = "invalid_byte_order",
+            .options = {.prefix_width_bytes = 1,
+                        .byte_order = static_cast<upr::ByteOrder>(99),
+                        .include_prefix_in_payload = false,
+                        .max_payload_size = 16},
+            .bytes = upr_test_support::make_bytes({0x01, 0xAA}),
+            .expected_status = upr::FrameStatus::kInvalidFrame,
+        },
+        LengthPrefixedCase{
             .name = "invalid_prefix_width",
             .options = {.prefix_width_bytes = 3, .max_payload_size = 16},
             .bytes = upr_test_support::make_bytes({0x03, 0xAA, 0xBB, 0xCC}),

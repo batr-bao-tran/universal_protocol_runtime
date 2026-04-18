@@ -104,13 +104,13 @@ constexpr std::array<BenchmarkCase, kProtocols.size() * kScenarios.size()> kBenc
 std::filesystem::path benchmark_schema_path() {
   if (const char* runfiles_dir = std::getenv("RUNFILES_DIR")) {
     return std::filesystem::path(runfiles_dir) / "_main" / "packages" / "upr_runtime" / "benchmarks" /
-           "benchmark_protocol.yaml";
+           "benchmark_protocol.upr";
   }
   if (const char* test_srcdir = std::getenv("TEST_SRCDIR")) {
     return std::filesystem::path(test_srcdir) / "_main" / "packages" / "upr_runtime" / "benchmarks" /
-           "benchmark_protocol.yaml";
+           "benchmark_protocol.upr";
   }
-  return std::filesystem::path("packages") / "upr_runtime" / "benchmarks" / "benchmark_protocol.yaml";
+  return std::filesystem::path("packages") / "upr_runtime" / "benchmarks" / "benchmark_protocol.upr";
 }
 
 std::string_view scenario_protocol_name(ScenarioKind scenario) {

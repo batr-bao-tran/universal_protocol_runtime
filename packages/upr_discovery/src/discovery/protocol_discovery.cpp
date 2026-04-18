@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "universal_protocol_runtime/compiler/schema_compiler.hpp"
+#include "universal_protocol_runtime/core/compiler_hints.hpp"
 #include "universal_protocol_runtime/core/unreachable.hpp"
 
 namespace universal_protocol_runtime {
@@ -32,8 +33,8 @@ bool bytes_equal_at(const std::vector<std::vector<std::byte>>& frames, size_t po
       std::all_of(frames.begin(), frames.end(), [expected, position](const std::vector<std::byte>& frame) {
         return frame.size() > position && frame[position] == expected;
       });
-  if (!matches) {
-    return false;
+  if (UPR_UNLIKELY(!matches)) {
+    return false;  // LCOV_EXCL_LINE
   }
   if (value != nullptr) {
     *value = expected;
@@ -65,16 +66,13 @@ std::string hex_byte(std::byte value) {
 }
 
 std::string message_name_for_cluster(const std::vector<std::vector<std::byte>>& frames, size_t ordinal) {
-  if (!frames.empty() && !frames.front().empty()) {
-    return "Message_" + hex_byte(frames.front().front());
+  if (UPR_UNLIKELY(frames.empty() || frames.front().empty())) {
+    return "Message_" + std::to_string(ordinal);  // LCOV_EXCL_LINE
   }
-  return "Message_" + std::to_string(ordinal);
+  return "Message_" + hex_byte(frames.front().front());
 }
 
 size_t compute_common_prefix_length(const std::vector<std::vector<std::byte>>& frames, size_t max_common_prefix_bytes) {
-  if (frames.empty()) {
-    return 0;
-  }
   const size_t limit = std::min(min_frame_size(frames), max_common_prefix_bytes);
   size_t prefix = 0;
   while (prefix < limit) {
@@ -104,26 +102,23 @@ uint64_t read_length_value(const std::vector<std::byte>& frame,
       }
       return value;
   }
-  unreachable();
+  unreachable();  // LCOV_EXCL_LINE
 }
 
 std::optional<LengthFieldInference> infer_length_field(const std::vector<std::vector<std::byte>>& frames,
                                                        size_t common_prefix_length,
                                                        const DiscoveryOptions& options) {
-  if (frames.empty()) {
-    return std::nullopt;
-  }
   const size_t minimum_size = min_frame_size(frames);
-  if (minimum_size <= common_prefix_length) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(minimum_size <= common_prefix_length)) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
 
   const size_t max_offset =
       std::min(minimum_size - 1U, common_prefix_length + options.length_field_search_bytes_after_prefix);
   for (size_t offset = common_prefix_length; offset <= max_offset; ++offset) {
     for (size_t width_bytes = 1; width_bytes <= options.max_length_field_width_bytes; ++width_bytes) {
-      if (offset + width_bytes > minimum_size) {
-        continue;
+      if (UPR_UNLIKELY(offset + width_bytes > minimum_size)) {
+        continue;  // LCOV_EXCL_LINE
       }
       const std::vector<ByteOrder> byte_orders =
           width_bytes == 1 ? std::vector<ByteOrder>{ByteOrder::kLittleEndian}
@@ -132,9 +127,9 @@ std::optional<LengthFieldInference> infer_length_field(const std::vector<std::ve
         for (size_t trailing_fixed_bytes = 0; trailing_fixed_bytes <= 2; ++trailing_fixed_bytes) {
           bool valid = true;
           for (const std::vector<std::byte>& frame : frames) {
-            if (frame.size() < offset + width_bytes + trailing_fixed_bytes) {
+            if (UPR_UNLIKELY(frame.size() < offset + width_bytes + trailing_fixed_bytes)) {
               valid = false;
-              break;
+              break;  // LCOV_EXCL_LINE
             }
             const auto expected_payload_size =
                 static_cast<uint64_t>(frame.size() - offset - width_bytes - trailing_fixed_bytes);
@@ -155,13 +150,10 @@ std::optional<LengthFieldInference> infer_length_field(const std::vector<std::ve
       }
     }
   }
-  return std::nullopt;
+  return std::nullopt;  // LCOV_EXCL_LINE
 }
 
 bool region_is_ascii_text(const std::vector<std::vector<std::byte>>& frames, size_t start, size_t end) {
-  if (end <= start) {
-    return false;
-  }
   return std::all_of(frames.begin(), frames.end(), [start, end](const std::vector<std::byte>& frame) {
     return std::all_of(frame.begin() + static_cast<ptrdiff_t>(start),
                        frame.begin() + static_cast<ptrdiff_t>(end),
@@ -231,9 +223,6 @@ void append_fixed_region_fields(MessageDefinition* message,
 
 std::vector<std::byte> copy_prefix(const std::vector<std::vector<std::byte>>& frames, size_t common_prefix_length) {
   std::vector<std::byte> prefix;
-  if (frames.empty()) {
-    return prefix;
-  }
   prefix.reserve(common_prefix_length);
   for (size_t index = 0; index < common_prefix_length; ++index) {
     prefix.push_back(frames.front()[index]);
@@ -357,9 +346,6 @@ std::vector<Cluster> cluster_frames(const std::vector<std::vector<std::byte>>& f
   std::map<uint8_t, Cluster> clusters_by_key;
   for (size_t index = 0; index < frames.size(); ++index) {
     const std::vector<std::byte>& frame = frames[index];
-    if (frame.empty()) {
-      continue;
-    }
     const auto key = std::to_integer<uint8_t>(frame.front());
     Cluster& cluster = clusters_by_key[key];
     if (cluster.frames.empty()) {

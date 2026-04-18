@@ -151,4 +151,38 @@ TEST(PosixFdTransportTest, ReportsErrorsFromExternallyClosedDescriptors) {
   ASSERT_EQ(::close(pipe_fds[1]), 0);
 }
 
+TEST(PosixFdTransportTest, HandlesInvalidWaitsAndReadErrors) {
+  std::array<int, 2> pipe_fds = {-1, -1};
+  ASSERT_EQ(::pipe(pipe_fds.data()), 0) << std::strerror(errno);
+
+  upr::PosixFdTransport transport(pipe_fds[0], {.own_handle = true, .non_blocking = true});
+  ASSERT_TRUE(transport.is_open());
+
+  const char forced_byte = 'q';
+  ASSERT_EQ(::write(pipe_fds[1], &forced_byte, 1), 1);
+  upr::MutableByteSpan invalid_destination(static_cast<std::byte*>(nullptr), 1U);
+  const upr::ReadResult bad_read = transport.read(invalid_destination);
+  EXPECT_FALSE(bad_read.status.ok());
+  EXPECT_EQ(bad_read.status.code(), upr::StatusCode::kIoError);
+  ASSERT_EQ(::close(pipe_fds[1]), 0);
+}
+
+TEST(PosixFdTransportTest, ReportsInitializationFailureWhenNonBlockingCannotBeSet) {
+#ifdef O_PATH
+  std::array<char, sizeof("/tmp/upr_fd_transport_path_XXXXXX")> file_template{};
+  std::memcpy(file_template.data(), "/tmp/upr_fd_transport_path_XXXXXX", file_template.size());
+  const int temp_fd = ::mkstemp(file_template.data());
+  ASSERT_GE(temp_fd, 0) << std::strerror(errno);
+  ASSERT_EQ(::close(temp_fd), 0);
+
+  upr::StatusOr<upr::PosixFdTransport> opened =
+      upr::PosixFdTransport::open_device(file_template.data(), O_PATH, {.own_handle = true, .non_blocking = true});
+  EXPECT_FALSE(opened.ok());
+
+  ASSERT_EQ(::unlink(file_template.data()), 0);
+#else
+  GTEST_SKIP() << "O_PATH is not available on this platform.";
+#endif
+}
+
 }  // namespace

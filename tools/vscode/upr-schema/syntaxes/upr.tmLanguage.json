@@ -1,0 +1,67 @@
+{
+  "scopeName": "source.upr",
+  "name": "UPR",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#strings" },
+    { "include": "#checksums" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.upr",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.upr",
+          "match": "\\b(protocol|import|enum|struct|message|checksum|signed)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.upr",
+          "match": "\\b(uint8|uint16|uint32|uint64|uint8_be|uint16_be|uint32_be|uint64_be|int8|int16|int32|int64|int8_be|int16_be|int32_be|int64_be|float32|float64|float32_be|float64_be|bytes|string|ascii|utf8|enum)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.upr",
+          "match": "\\b(0[xX][0-9a-fA-F]+|\\d+)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.upr",
+          "begin": "\"",
+          "end": "\""
+        }
+      ]
+    },
+    "checksums": {
+      "patterns": [
+        {
+          "name": "entity.name.function.upr",
+          "match": "\\b(xor8|sum16|crc16_ccitt|crc32|crc32c)\\b"
+        },
+        {
+          "name": "constant.language.upr",
+          "match": "\\b(frame_start|frame_end|before_self|after_self)\\b"
+        }
+      ]
+    }
+  }
+}
