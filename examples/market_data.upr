@@ -1,0 +1,12 @@
+protocol market_data
+
+import "examples/order_types.upr"
+
+message Order {
+  message_type: uint8 = 1
+  symbol: ascii[4]
+  price: float32
+  quantity: uint32
+  side: Side
+  order_type: OrderType
+}

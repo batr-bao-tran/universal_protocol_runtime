@@ -45,9 +45,11 @@ CompiledMessage::CompiledMessage(std::string name,
       minimum_size_(minimum_size),
       allow_trailing_bytes_(allow_trailing_bytes),
       dispatch_prefix_(std::move(dispatch_prefix)) {
+  field_ids_.reserve(fields_.size());
   for (const CompiledField& field : fields_) {
     field_ids_.emplace(field.name, field.id);
   }
+  bit_field_ids_.reserve(bit_fields_.size());
   for (const CompiledBitField& bit_field : bit_fields_) {
     bit_field_ids_.emplace(bit_field.name, bit_field.id);
   }
@@ -74,11 +76,19 @@ CompiledProtocol::CompiledProtocol(std::string name,
                                    std::vector<CompiledMessage> structs,
                                    std::vector<CompiledMessage> messages)
     : name_(std::move(name)), fingerprint_(fingerprint), structs_(std::move(structs)), messages_(std::move(messages)) {
+  struct_ids_.reserve(structs_.size());
   for (size_t index = 0; index < structs_.size(); ++index) {
     struct_ids_.emplace(std::string(structs_[index].name()), index);
   }
+  message_ids_.reserve(messages_.size());
   for (size_t index = 0; index < messages_.size(); ++index) {
     message_ids_.emplace(std::string(messages_[index].name()), index);
+    const std::span<const std::byte> dispatch_prefix = messages_[index].dispatch_prefix();
+    if (dispatch_prefix.empty()) {
+      fallback_message_ids_.push_back(index);
+      continue;
+    }
+    dispatch_message_ids_[std::to_integer<uint8_t>(dispatch_prefix.front())].push_back(index);
   }
 }
 
@@ -103,6 +113,13 @@ const CompiledMessage* CompiledProtocol::struct_by_id(size_t struct_id) const {
     return nullptr;
   }
   return &structs_[struct_id];
+}
+
+std::span<const size_t> CompiledProtocol::dispatch_candidate_ids(ByteSpan frame) const noexcept {
+  if (frame.empty()) {
+    return {};
+  }
+  return dispatch_message_ids_[std::to_integer<uint8_t>(frame.front())];
 }
 
 namespace {
@@ -171,7 +188,21 @@ void fingerprint_field(XxHash64State* hasher, const FieldDefinition& field) {
   }
 }
 
+void fingerprint_enum(XxHash64State* hasher, const EnumDefinition& definition) {
+  hasher->update("enum");
+  hasher->update(definition.name);
+  hasher->update_integral(definition.width_bytes);
+  hasher->update_integral(definition.byte_order);
+  for (const EnumValueDefinition& enum_value : definition.values) {
+    hasher->update_integral(enum_value.value);
+    hasher->update(enum_value.name);
+  }
+}
+
 Status validate_protocol_definition(const ProtocolDefinition& definition) {
+  if (!definition.imports.empty()) {
+    return invalid_argument("Protocol imports must be resolved before compilation.");
+  }
   if (definition.name.empty()) {
     return invalid_argument("Protocol name must not be empty.");
   }
@@ -196,6 +227,25 @@ struct PendingChecksum {
 };
 
 using FieldIdMap = std::unordered_map<std::string, FieldId, TransparentStringHash, std::equal_to<>>;
+
+CompiledChecksum::BuiltinKind checksum_builtin_kind(std::string_view algorithm) noexcept {
+  if (algorithm == "xor8") {
+    return CompiledChecksum::BuiltinKind::kXor8;
+  }
+  if (algorithm == "sum16") {
+    return CompiledChecksum::BuiltinKind::kSum16;
+  }
+  if (algorithm == "crc16_ccitt") {
+    return CompiledChecksum::BuiltinKind::kCrc16Ccitt;
+  }
+  if (algorithm == "crc32") {
+    return CompiledChecksum::BuiltinKind::kCrc32;
+  }
+  if (algorithm == "crc32c") {
+    return CompiledChecksum::BuiltinKind::kCrc32c;
+  }
+  return CompiledChecksum::BuiltinKind::kCustom;
+}
 
 class ProtocolCompiler {
  public:
@@ -250,6 +300,21 @@ class ProtocolCompiler {
 
   Status validate_names() {
     std::unordered_set<std::string> layout_names;
+    layout_names.reserve(definition_.enums.size() + definition_.structs.size() + definition_.messages.size());
+    enum_ids_.reserve(definition_.enums.size());
+    for (const EnumDefinition& enum_definition : definition_.enums) {
+      if (enum_definition.name.empty()) {
+        return invalid_argument("Enum name must not be empty.");
+      }
+      if (!layout_names.insert(enum_definition.name).second) {
+        return invalid_argument("Duplicate layout name: " + enum_definition.name);
+      }
+      if (!is_valid_scalar_width(enum_definition.width_bytes)) {
+        return invalid_argument("Enum '" + enum_definition.name + "' has an unsupported underlying width.");
+      }
+      enum_ids_.emplace(enum_definition.name, enum_ids_.size());
+    }
+    struct_ids_.reserve(definition_.structs.size());
     for (const StructDefinition& struct_definition : definition_.structs) {
       if (struct_definition.name.empty()) {
         return invalid_argument("Struct name must not be empty.");
@@ -368,6 +433,8 @@ class ProtocolCompiler {
     size_t minimum_size = 0;
     bool collecting_dispatch_prefix = true;
 
+    field_names.reserve(layout.fields->size());
+    field_ids.reserve(layout.fields->size());
     compiled_fields.reserve(layout.fields->size());
     for (size_t index = 0; index < layout.fields->size(); ++index) {
       const FieldDefinition& field = (*layout.fields)[index];
@@ -420,31 +487,40 @@ class ProtocolCompiler {
           return invalid_argument("Bitfields are only supported on scalar containers.");
         }
       } else if (compiled_field.kind == FieldKind::kStruct) {
-        if (field.has_expected_unsigned) {
-          return invalid_argument("Struct field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
-                                  std::string(layout.name) + "' cannot use 'expect'.");
-        }
-        if (field.fixed_size != 0 || !field.size_from_field.empty()) {
-          return invalid_argument("Struct field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
-                                  std::string(layout.name) + "' derives its size from the referenced struct.");
-        }
-        if (!field.bit_fields.empty()) {
-          return invalid_argument("Bitfields are only supported on scalar containers.");
-        }
         if (field.referenced_type.empty()) {
           return invalid_argument("Struct field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
                                   std::string(layout.name) + "' must reference a struct type.");
         }
-        const auto struct_it = struct_ids_.find(field.referenced_type);
-        if (struct_it == struct_ids_.end()) {
-          return not_found("Unknown struct type: " + field.referenced_type);
+        const auto enum_it = enum_ids_.find(field.referenced_type);
+        if (enum_it != enum_ids_.end()) {
+          const EnumDefinition& enum_definition = definition_.enums[enum_it->second];
+          compiled_field.kind = FieldKind::kEnum;
+          compiled_field.width_bytes = enum_definition.width_bytes;
+          compiled_field.byte_order = enum_definition.byte_order;
+          compiled_field.enum_values = enum_definition.values;
+        } else {
+          if (field.has_expected_unsigned) {
+            return invalid_argument("Struct field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                    std::string(layout.name) + "' cannot use 'expect'.");
+          }
+          if (field.fixed_size != 0 || !field.size_from_field.empty()) {
+            return invalid_argument("Struct field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                    std::string(layout.name) + "' derives its size from the referenced struct.");
+          }
+          if (!field.bit_fields.empty()) {
+            return invalid_argument("Bitfields are only supported on scalar containers.");
+          }
+          const auto struct_it = struct_ids_.find(field.referenced_type);
+          if (struct_it == struct_ids_.end()) {
+            return not_found("Unknown struct type: " + field.referenced_type);
+          }
+          const auto compiled_struct_id = compile_struct(struct_it->second);
+          if (!compiled_struct_id.ok()) {
+            return compiled_struct_id.status();
+          }
+          compiled_field.struct_id = compiled_struct_id.value();
+          compiled_field.fixed_size = compiled_structs_[compiled_struct_id.value()].minimum_size();
         }
-        const auto compiled_struct_id = compile_struct(struct_it->second);
-        if (!compiled_struct_id.ok()) {
-          return compiled_struct_id.status();
-        }
-        compiled_field.struct_id = compiled_struct_id.value();
-        compiled_field.fixed_size = compiled_structs_[compiled_struct_id.value()].minimum_size();
       } else {
         if (!is_valid_scalar_width(compiled_field.width_bytes)) {
           return invalid_argument("Scalar field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
@@ -552,6 +628,7 @@ class ProtocolCompiler {
           .result_width_bytes = pending.spec.result_width_bytes,
           .function = pending.spec.function,
           .algorithm_name = pending.spec.name,
+          .builtin_kind = checksum_builtin_kind(pending.spec.name),
           .from = from_anchor.value(),
           .to = to_anchor.value(),
       });
@@ -576,6 +653,9 @@ class ProtocolCompiler {
         fingerprint_field(&hasher, field);
       }
     }
+    for (const EnumDefinition& enum_definition : definition_.enums) {
+      fingerprint_enum(&hasher, enum_definition);
+    }
     for (const MessageDefinition& message : definition_.messages) {
       hasher.update(kFingerprintMessageToken);
       hasher.update(message.name);
@@ -588,6 +668,7 @@ class ProtocolCompiler {
   }
 
   const ProtocolDefinition& definition_;
+  std::unordered_map<std::string, size_t, TransparentStringHash, std::equal_to<>> enum_ids_;
   std::unordered_map<std::string, size_t, TransparentStringHash, std::equal_to<>> struct_ids_;
   std::vector<CompiledMessage> compiled_structs_;
   std::vector<CompileState> struct_states_;

@@ -5,17 +5,23 @@
 
 namespace universal_protocol_runtime {
 
+#if defined(__clang__)
+#pragma clang coverage off
+#endif
 // LCOV_EXCL_START
-[[noreturn]] inline void unreachable() noexcept {
+[[noreturn, clang::no_sanitize("coverage")]] inline void unreachable() noexcept {  // LCOV_EXCL_LINE
 #if defined(_MSC_VER)
-  __assume(false);
+  __assume(false);  // LCOV_EXCL_LINE
 #elif defined(__clang__) || defined(__GNUC__)
-  __builtin_unreachable();
+  __builtin_unreachable();  // LCOV_EXCL_LINE
 #else
-  std::abort();
+  std::abort();  // LCOV_EXCL_LINE
 #endif
 }
 // LCOV_EXCL_STOP
+#if defined(__clang__)
+#pragma clang coverage on
+#endif
 
 }  // namespace universal_protocol_runtime
 

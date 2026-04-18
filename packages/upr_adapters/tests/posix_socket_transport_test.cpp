@@ -1,5 +1,6 @@
 #include "universal_protocol_runtime/adapters/posix_socket_transport.hpp"
 
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -8,6 +9,7 @@
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -184,6 +186,41 @@ TEST(PosixSocketTransportTest, ReportsErrorsFromExternallyClosedSockets) {
   EXPECT_EQ(close_status.code(), upr::StatusCode::kIoError);
 
   ASSERT_EQ(::close(sockets[1]), 0);
+}
+
+TEST(PosixSocketTransportTest, HandlesInvalidWaitsAndReadErrors) {
+  std::array<int, 2> sockets = {-1, -1};
+  ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()), 0) << std::strerror(errno);
+
+  upr::PosixSocketTransport transport(sockets[0], {.own_handle = true, .non_blocking = true});
+  ASSERT_TRUE(transport.is_open());
+
+  const char forced_byte = 'r';
+  ASSERT_EQ(::write(sockets[1], &forced_byte, 1), 1);
+  upr::MutableByteSpan invalid_destination(static_cast<std::byte*>(nullptr), 1U);
+  const upr::ReadResult bad_read = transport.read(invalid_destination);
+  EXPECT_FALSE(bad_read.status.ok());
+  EXPECT_EQ(bad_read.status.code(), upr::StatusCode::kIoError);
+  ASSERT_EQ(::close(sockets[1]), 0);
+}
+
+TEST(PosixSocketTransportTest, ReportsInitializationFailureWhenNonBlockingCannotBeSet) {
+#ifdef O_PATH
+  std::array<int, 2> sockets = {-1, -1};
+  ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()), 0) << std::strerror(errno);
+
+  const std::string proc_path = "/proc/self/fd/" + std::to_string(sockets[0]);
+  const int opath_fd = ::open(proc_path.c_str(), O_PATH);
+  ASSERT_GE(opath_fd, 0) << std::strerror(errno);
+  ASSERT_EQ(::close(sockets[0]), 0);
+  ASSERT_EQ(::close(sockets[1]), 0);
+
+  upr::PosixSocketTransport transport(opath_fd, {.own_handle = true, .non_blocking = true});
+  EXPECT_FALSE(transport.is_open());
+  EXPECT_EQ(transport.native_handle(), -1);
+#else
+  GTEST_SKIP() << "O_PATH is not available on this platform.";
+#endif
 }
 
 }  // namespace

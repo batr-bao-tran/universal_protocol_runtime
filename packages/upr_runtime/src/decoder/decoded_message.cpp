@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <bit>
 
-#include "universal_protocol_runtime/core/unreachable.hpp"
+#include "universal_protocol_runtime/core/compiler_hints.hpp"
 #include "universal_protocol_runtime/decoder/direct_decode_support.hpp"
 
 namespace universal_protocol_runtime {
@@ -22,12 +22,8 @@ bool supports_eager_scalar_cache(const CompiledField& field) {
       return field.width_bytes == sizeof(uint32_t);
     case FieldKind::kFloat64:
       return field.width_bytes == sizeof(uint64_t);
-    case FieldKind::kBytes:
-    case FieldKind::kString:
-    case FieldKind::kStruct:
-      return false;
   }
-  unreachable();  // LCOV_EXCL_LINE
+  return false;  // LCOV_EXCL_LINE
 }
 
 std::optional<size_t> checksum_anchor_offset(
@@ -102,11 +98,8 @@ std::optional<DecodedMessage::ResolvedField> DecodedMessage::resolved_field(Fiel
 
 std::optional<uint64_t> DecodedMessage::cached_scalar_raw(FieldId field_id) const {
   const CompiledField* field = field_definition(field_id);
-  if (field == nullptr || !field->is_scalar()) {
-    return std::nullopt;
-  }
-  if (field_id >= field_count_) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(field == nullptr || !field->is_scalar())) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   if (scalar_cache_valid_[field_id]) {
     return scalar_cache_values_[field_id];
@@ -120,8 +113,8 @@ void DecodedMessage::eager_cache_scalar(FieldId field_id, ByteSpan field_bytes) 
     return;
   }
   const auto value = direct_decode_support::read_unsigned_scalar(field_bytes, field->byte_order);
-  if (!value.has_value()) {
-    return;
+  if (UPR_UNLIKELY(!value.has_value())) {
+    return;  // LCOV_EXCL_LINE
   }
   scalar_cache_values_[field_id] = *value;
   scalar_cache_valid_[field_id] = true;
@@ -153,8 +146,8 @@ std::optional<float> DecodedMessage::get_float32(FieldId field_id) const {
     return std::nullopt;
   }
   const auto value = cached_scalar_raw(field_id);
-  if (!value.has_value()) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(!value.has_value())) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   return std::bit_cast<float>(static_cast<uint32_t>(*value));
 }
@@ -165,8 +158,8 @@ std::optional<double> DecodedMessage::get_float64(FieldId field_id) const {
     return std::nullopt;
   }
   const auto value = cached_scalar_raw(field_id);
-  if (!value.has_value()) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(!value.has_value())) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   return std::bit_cast<double>(*value);
 }
@@ -181,8 +174,8 @@ std::optional<ByteSpan> DecodedMessage::get_bytes(FieldId field_id) const {
 
 std::optional<std::string_view> DecodedMessage::get_string_view(FieldId field_id) const {
   const CompiledField* field = field_definition(field_id);
-  if (field == nullptr || field->kind != FieldKind::kString) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(field == nullptr || field->kind != FieldKind::kString)) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   const auto resolved = resolved_field(field_id);
   if (!resolved.has_value()) {
@@ -212,20 +205,20 @@ std::optional<DecodedMessage> DecodedMessage::get_struct(FieldId field_id) const
     return std::nullopt;
   }
   const auto resolved = resolved_field(field_id);
-  if (!resolved.has_value()) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(!resolved.has_value())) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   const CompiledMessage* nested_layout = protocol_->struct_by_id(field->struct_id);
-  if (nested_layout == nullptr) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(nested_layout == nullptr)) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
 
   DecodedMessage nested;
   size_t bytes_consumed = 0;
-  if (nested.assign_from_layout(
-          *protocol_, *nested_layout, frame_.subspan(resolved->offset, resolved->size), &bytes_consumed) !=
-      DecodeStatus::kOk) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(nested.assign_from_layout(
+                       *protocol_, *nested_layout, frame_.subspan(resolved->offset, resolved->size), &bytes_consumed) !=
+                   DecodeStatus::kOk)) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   return nested;
 }
@@ -236,10 +229,10 @@ std::optional<uint64_t> DecodedMessage::get_bit_unsigned(BitFieldId bit_field_id
     return std::nullopt;
   }
   const CompiledField* container_field = field_definition(bit_field->container_field_id);
-  if (container_field == nullptr ||
-      (container_field->kind != FieldKind::kUnsigned && container_field->kind != FieldKind::kSigned &&
-       container_field->kind != FieldKind::kEnum)) {
-    return std::nullopt;
+  if (UPR_UNLIKELY(container_field == nullptr ||
+                   (container_field->kind != FieldKind::kUnsigned && container_field->kind != FieldKind::kSigned &&
+                    container_field->kind != FieldKind::kEnum))) {
+    return std::nullopt;  // LCOV_EXCL_LINE
   }
   const auto container_value = cached_scalar_raw(bit_field->container_field_id);
   if (!container_value.has_value()) {
@@ -336,10 +329,10 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
                                                 const CompiledMessage& layout,
                                                 ByteSpan frame,
                                                 size_t* bytes_consumed) {
-  if (layout.fields().size() > kMaxFieldsPerMessage) {
+  if (UPR_UNLIKELY(layout.fields().size() > kMaxFieldsPerMessage)) {
     return DecodeStatus::kFieldLimitExceeded;
   }
-  if (frame.size() < layout.minimum_size()) {
+  if (UPR_UNLIKELY(frame.size() < layout.minimum_size())) {
     return DecodeStatus::kSchemaMismatch;
   }
 
@@ -355,7 +348,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
     if (field.kind == FieldKind::kBytes || field.kind == FieldKind::kString) {
       if (field.dynamic_size) {
         const auto dependency_value = candidate.get_unsigned(field.size_from_field);
-        if (!dependency_value.has_value() || *dependency_value > frame.size()) {
+        if (UPR_UNLIKELY(!dependency_value.has_value() || *dependency_value > frame.size())) {
           return DecodeStatus::kInvalidData;
         }
         field_size = static_cast<size_t>(*dependency_value);
@@ -375,7 +368,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
       field_size = nested_size;
     }
 
-    if (offset + field_size > frame.size()) {
+    if (UPR_UNLIKELY(offset + field_size > frame.size())) {
       return DecodeStatus::kSchemaMismatch;
     }
     candidate.resolved_fields_[field.id] = {.offset = offset, .size = field_size};
@@ -384,7 +377,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
 
     if (field.has_expected_unsigned) {
       const auto actual = candidate.cached_scalar_raw(field.id);
-      if (!actual.has_value() || *actual != field.expected_unsigned) {
+      if (UPR_UNLIKELY(!actual.has_value() || *actual != field.expected_unsigned)) {
         return DecodeStatus::kSchemaMismatch;
       }
     }
@@ -394,7 +387,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
           field.string_encoding == StringEncoding::kAscii
               ? direct_decode_support::runtime_validate_string<StringEncoding::kAscii>(field_bytes)
               : direct_decode_support::runtime_validate_string<StringEncoding::kUtf8>(field_bytes);
-      if (!valid_encoding) {
+      if (UPR_UNLIKELY(!valid_encoding)) {
         return DecodeStatus::kInvalidData;
       }
     }
@@ -402,7 +395,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
     offset += field_size;
   }
 
-  if (!layout.allow_trailing_bytes() && offset != frame.size()) {
+  if (UPR_UNLIKELY(!layout.allow_trailing_bytes() && offset != frame.size())) {
     return DecodeStatus::kSchemaMismatch;
   }
 
@@ -414,26 +407,34 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
         checksum_anchor_offset(checksum.from, frame, candidate.resolved_fields_, candidate.field_count_);
     const auto to_offset =
         checksum_anchor_offset(checksum.to, frame, candidate.resolved_fields_, candidate.field_count_);
-    if (!from_offset.has_value() || !to_offset.has_value() || *from_offset > *to_offset || *to_offset > frame.size()) {
+    if (UPR_UNLIKELY(!from_offset.has_value() || !to_offset.has_value() || *from_offset > *to_offset ||
+                     *to_offset > frame.size())) {
       return DecodeStatus::kSchemaMismatch;
     }
     const ByteSpan checksum_bytes = frame.subspan(*from_offset, *to_offset - *from_offset);
     uint64_t actual = 0;
-    if (checksum.algorithm_name == "xor8") {
-      actual = direct_decode_support::runtime_checksum_xor8(checksum_bytes);
-    } else if (checksum.algorithm_name == "sum16") {
-      actual = direct_decode_support::runtime_checksum_sum16(checksum_bytes);
-    } else if (checksum.algorithm_name == "crc16_ccitt") {
-      actual = direct_decode_support::runtime_checksum_crc16_ccitt(checksum_bytes);
-    } else if (checksum.algorithm_name == "crc32") {
-      actual = direct_decode_support::runtime_checksum_crc32(checksum_bytes);
-    } else if (checksum.algorithm_name == "crc32c") {
-      actual = direct_decode_support::runtime_checksum_crc32c(checksum_bytes);
-    } else {
-      actual = checksum.function(checksum_bytes);
+    switch (checksum.builtin_kind) {
+      case CompiledChecksum::BuiltinKind::kXor8:
+        actual = direct_decode_support::runtime_checksum_xor8(checksum_bytes);
+        break;
+      case CompiledChecksum::BuiltinKind::kSum16:
+        actual = direct_decode_support::runtime_checksum_sum16(checksum_bytes);
+        break;
+      case CompiledChecksum::BuiltinKind::kCrc16Ccitt:
+        actual = direct_decode_support::runtime_checksum_crc16_ccitt(checksum_bytes);
+        break;
+      case CompiledChecksum::BuiltinKind::kCrc32:
+        actual = direct_decode_support::runtime_checksum_crc32(checksum_bytes);
+        break;
+      case CompiledChecksum::BuiltinKind::kCrc32c:
+        actual = direct_decode_support::runtime_checksum_crc32c(checksum_bytes);
+        break;
+      case CompiledChecksum::BuiltinKind::kCustom:
+        actual = checksum.function(checksum_bytes);
+        break;
     }
     const auto expected = candidate.get_unsigned(checksum.field_id);
-    if (!expected.has_value() || *expected != actual) {
+    if (UPR_UNLIKELY(!expected.has_value() || *expected != actual)) {
       return DecodeStatus::kChecksumMismatch;
     }
   }

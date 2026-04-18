@@ -1,5 +1,6 @@
 #ifndef UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_COMPILER_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_COMPILER__COMPILED_PROTOCOL_HPP_
 #define UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_COMPILER_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_COMPILER__COMPILED_PROTOCOL_HPP_
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -51,10 +52,20 @@ struct CompiledBitField {
 };
 
 struct CompiledChecksum {
+  enum class BuiltinKind {
+    kCustom,
+    kXor8,
+    kSum16,
+    kCrc16Ccitt,
+    kCrc32,
+    kCrc32c,
+  };
+
   FieldId field_id = 0;
   uint8_t result_width_bytes = 0;
   ChecksumFunction function = nullptr;
   std::string algorithm_name;
+  BuiltinKind builtin_kind = BuiltinKind::kCustom;
   CompiledChecksumAnchor from;
   CompiledChecksumAnchor to;
 };
@@ -157,13 +168,21 @@ class CompiledProtocol {
 
   const CompiledMessage* struct_by_id(size_t struct_id) const;
 
+  std::span<const size_t> dispatch_candidate_ids(ByteSpan frame) const noexcept;
+
+  std::span<const size_t> fallback_candidate_ids() const noexcept { return fallback_message_ids_; }
+
  private:
+  static constexpr size_t kDispatchTableSize = 256U;
+
   std::string name_;
   uint64_t fingerprint_ = 0;
   std::vector<CompiledMessage> structs_;
   std::vector<CompiledMessage> messages_;
   std::unordered_map<std::string, size_t, TransparentStringHash, std::equal_to<>> struct_ids_;
   std::unordered_map<std::string, size_t, TransparentStringHash, std::equal_to<>> message_ids_;
+  std::array<std::vector<size_t>, kDispatchTableSize> dispatch_message_ids_;
+  std::vector<size_t> fallback_message_ids_;
 };
 
 }  // namespace universal_protocol_runtime

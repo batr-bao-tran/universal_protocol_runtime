@@ -8,9 +8,17 @@
 
 namespace universal_protocol_runtime {
 
+struct SchemaLoadOptions {
+  bool resolve_imports = true;
+};
+
 StatusOr<ProtocolDefinition> load_protocol_definition_from_yaml(std::string_view yaml_text);
+StatusOr<ProtocolDefinition> load_protocol_definition_from_upr(std::string_view upr_text);
+StatusOr<ProtocolDefinition> load_protocol_definition(std::string_view schema_text, std::string_view format_hint = {});
 
 StatusOr<ProtocolDefinition> load_protocol_definition_from_file(const std::string& path);
+StatusOr<ProtocolDefinition> load_protocol_definition_from_file(const std::string& path,
+                                                                const SchemaLoadOptions& options);
 
 }  // namespace universal_protocol_runtime
 

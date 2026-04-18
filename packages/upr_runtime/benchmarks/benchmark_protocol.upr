@@ -1,0 +1,25 @@
+protocol benchmark_runtime
+
+message BlobEnvelope {
+  message_type: uint8 = 1
+  payload_length: uint16
+  payload: bytes[payload_length]
+  checksum: uint8 checksum(xor8)
+}
+
+message MarketData {
+  message_type: uint8 = 2
+  instrument_id: uint32
+  sequence: uint32
+  exchange_time_ns: uint64
+  receive_time_ns: uint64
+  last_price: float64
+  last_qty: uint32
+  bid_qty: uint32
+  ask_qty: uint32
+  bid_price_micros: uint32
+  ask_price_micros: uint32
+  symbol: ascii[8]
+  flags: uint8
+  checksum: uint16 checksum(sum16)
+}

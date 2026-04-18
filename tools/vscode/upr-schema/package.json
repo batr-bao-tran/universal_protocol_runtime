@@ -1,0 +1,83 @@
+{
+  "name": "upr-schema-support",
+  "displayName": "UPR Schema Support",
+  "description": "Syntax highlighting, snippets, and language-server support for Universal Protocol Runtime schema files.",
+  "version": "0.0.1",
+  "publisher": "upr",
+  "license": "GPL-3.0-only",
+  "main": "./extension.js",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:batr-bao-tran/universal_protocol_runtime.git"
+  },
+  "homepage": "https://github.com/batr-bao-tran/universal_protocol_runtime",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:upr"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "upr",
+        "aliases": ["UPR", "upr"],
+        "extensions": [".upr"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "upr",
+        "scopeName": "source.upr",
+        "path": "./syntaxes/upr.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "upr",
+        "path": "./snippets/upr.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "uprMessage",
+        "description": "UPR message names"
+      },
+      {
+        "id": "uprEnum",
+        "description": "UPR enum names"
+      },
+      {
+        "id": "uprField",
+        "description": "UPR field names"
+      }
+    ],
+    "configuration": {
+      "title": "UPR Schema",
+      "properties": {
+        "upr.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the built-in UPR language server."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "[upr]": {
+        "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+          "uprMessage": "#98C379",
+          "uprEnum": "#E5C07B",
+          "uprField": "#80DEEA"
+        }
+      }
+    }
+  }
+}
