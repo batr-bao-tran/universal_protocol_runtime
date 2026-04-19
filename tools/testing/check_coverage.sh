@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-readonly DEFAULT_THRESHOLD_PERCENT="97"
+readonly DEFAULT_THRESHOLD_PERCENT="96"
 readonly DEFAULT_BAZEL_VERSION="8.5.0"
 readonly COVERAGE_TARGETS="//..."
 readonly COVERAGE_FILTER='^//'

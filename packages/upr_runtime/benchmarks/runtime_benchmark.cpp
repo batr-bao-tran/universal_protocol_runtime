@@ -218,6 +218,27 @@ int main(int argc, char** argv) {
     configure_benchmark(benchmark_rule);
   }
 
+  for (const uprb::EncodeBenchmarkCase& benchmark_case : uprb::encode_benchmark_cases()) {
+    const std::string name = "encode_stream/" + std::string(uprb::to_string(benchmark_case.protocol)) + "/" +
+                             std::string(uprb::to_string(benchmark_case.scenario));
+    auto runner = uprb::make_encode_runner(benchmark_case);
+    const uprb::CorpusMetrics metrics = uprb::corpus_metrics(benchmark_case);
+
+    benchmark::Benchmark* benchmark_rule =
+        benchmark::RegisterBenchmark(name, [runner = std::move(runner), metrics](benchmark::State& state) {
+          uint64_t sink = 0;
+          for (auto _ : state) {
+            sink ^= runner();
+          }
+          benchmark::DoNotOptimize(sink);
+          state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(metrics.message_count));
+          state.SetBytesProcessed(state.iterations() * static_cast<int64_t>(metrics.stream_bytes));
+          state.counters["encoded_bytes_per_message"] = metrics.encoded_bytes_per_message;
+          state.counters["seed_count"] = static_cast<double>(metrics.seed_count);
+        });
+    configure_benchmark(benchmark_rule);
+  }
+
   register_byte_op_benchmarks();
 
   benchmark::RunSpecifiedBenchmarks();
