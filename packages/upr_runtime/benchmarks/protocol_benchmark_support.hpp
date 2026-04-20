@@ -18,6 +18,14 @@ enum class ProtocolKind {
   KFlatbuffers,
 };
 
+enum class EncodeProtocolKind {
+  KUprRuntimeSchema,
+  KUprStaticSchema,
+  KPackedBinary,
+  KProtobuf,
+  KFlatbuffers,
+};
+
 enum class ScenarioKind {
   KBlobSmall,
   KBlobLarge,
@@ -29,6 +37,11 @@ struct BenchmarkCase {
   ScenarioKind scenario = ScenarioKind::KBlobSmall;
 };
 
+struct EncodeBenchmarkCase {
+  EncodeProtocolKind protocol = EncodeProtocolKind::KUprRuntimeSchema;
+  ScenarioKind scenario = ScenarioKind::KBlobSmall;
+};
+
 struct CorpusMetrics {
   size_t message_count = 0;
   size_t stream_bytes = 0;
@@ -37,12 +50,16 @@ struct CorpusMetrics {
 };
 
 std::span<const BenchmarkCase> benchmark_cases();
+std::span<const EncodeBenchmarkCase> encode_benchmark_cases();
 
 std::string_view to_string(ProtocolKind protocol);
+std::string_view to_string(EncodeProtocolKind protocol);
 std::string_view to_string(ScenarioKind scenario);
 
 CorpusMetrics corpus_metrics(const BenchmarkCase& benchmark_case);
+CorpusMetrics corpus_metrics(const EncodeBenchmarkCase& benchmark_case);
 std::function<uint64_t()> make_decode_runner(const BenchmarkCase& benchmark_case);
+std::function<uint64_t()> make_encode_runner(const EncodeBenchmarkCase& benchmark_case);
 
 }  // namespace universal_protocol_runtime::benchmarks
 

@@ -30,6 +30,7 @@
 #include "universal_protocol_runtime/core/unreachable.hpp"
 #include "universal_protocol_runtime/decoder/decoded_message.hpp"
 #include "universal_protocol_runtime/decoder/protocol_decoder.hpp"
+#include "universal_protocol_runtime/encoder/message_encoder.hpp"
 #include "universal_protocol_runtime/pdl/yaml_loader.hpp"
 
 namespace flat = upr_benchmarks;
@@ -100,6 +101,30 @@ constexpr std::array<BenchmarkCase, kProtocols.size() * kScenarios.size()> kBenc
     BenchmarkCase{.protocol = ProtocolKind::KProtobuf, .scenario = ScenarioKind::KMarketData},
     BenchmarkCase{.protocol = ProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KMarketData},
 };
+constexpr std::array<EncodeProtocolKind, 5> kEncodeProtocols = {
+    EncodeProtocolKind::KUprRuntimeSchema,
+    EncodeProtocolKind::KUprStaticSchema,
+    EncodeProtocolKind::KPackedBinary,
+    EncodeProtocolKind::KProtobuf,
+    EncodeProtocolKind::KFlatbuffers,
+};
+constexpr std::array<EncodeBenchmarkCase, kEncodeProtocols.size() * kScenarios.size()> kEncodeBenchmarkCases = {
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprRuntimeSchema, .scenario = ScenarioKind::KBlobSmall},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KBlobSmall},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KPackedBinary, .scenario = ScenarioKind::KBlobSmall},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KProtobuf, .scenario = ScenarioKind::KBlobSmall},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KBlobSmall},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprRuntimeSchema, .scenario = ScenarioKind::KBlobLarge},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KBlobLarge},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KPackedBinary, .scenario = ScenarioKind::KBlobLarge},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KProtobuf, .scenario = ScenarioKind::KBlobLarge},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KBlobLarge},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprRuntimeSchema, .scenario = ScenarioKind::KMarketData},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KUprStaticSchema, .scenario = ScenarioKind::KMarketData},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KPackedBinary, .scenario = ScenarioKind::KMarketData},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KProtobuf, .scenario = ScenarioKind::KMarketData},
+    EncodeBenchmarkCase{.protocol = EncodeProtocolKind::KFlatbuffers, .scenario = ScenarioKind::KMarketData},
+};
 
 std::filesystem::path benchmark_schema_path() {
   if (const char* runfiles_dir = std::getenv("RUNFILES_DIR")) {
@@ -160,6 +185,11 @@ struct CorpusBundle {
   std::vector<std::byte> stream_bytes;
   size_t message_count = 0;
   size_t total_frame_bytes = 0;
+};
+
+template <typename Message>
+struct LogicalCorpus {
+  std::vector<Message> messages;
 };
 
 class SplitMix64 {
@@ -945,6 +975,28 @@ CorpusBundle build_market_data_corpus(size_t messages_per_seed, ProtocolKind pro
   return corpus;
 }
 
+LogicalCorpus<BlobEnvelopeData> build_blob_logical_corpus(size_t payload_bytes, size_t messages_per_seed) {
+  LogicalCorpus<BlobEnvelopeData> corpus;
+  corpus.messages.reserve(messages_per_seed * kDatasetSeeds.size());
+  for (const uint64_t seed : kDatasetSeeds) {
+    for (size_t ordinal = 0; ordinal < messages_per_seed; ++ordinal) {
+      corpus.messages.push_back(make_blob_message(seed, ordinal, payload_bytes));
+    }
+  }
+  return corpus;
+}
+
+LogicalCorpus<MarketDataData> build_market_data_logical_corpus(size_t messages_per_seed) {
+  LogicalCorpus<MarketDataData> corpus;
+  corpus.messages.reserve(messages_per_seed * kDatasetSeeds.size());
+  for (const uint64_t seed : kDatasetSeeds) {
+    for (size_t ordinal = 0; ordinal < messages_per_seed; ++ordinal) {
+      corpus.messages.push_back(make_market_data_message(seed, ordinal));
+    }
+  }
+  return corpus;
+}
+
 size_t protocol_index(ProtocolKind protocol) {
   switch (protocol) {
     case ProtocolKind::KUprReflective:
@@ -991,8 +1043,48 @@ const std::array<std::array<CorpusBundle, kScenarios.size()>, kProtocols.size()>
   return kBundles;
 }
 
+const LogicalCorpus<BlobEnvelopeData>& blob_logical_corpus(ScenarioKind scenario) {
+  static const auto kBlobCorpora = [] {
+    std::array<LogicalCorpus<BlobEnvelopeData>, 2> corpora{};
+    corpora[0] = build_blob_logical_corpus(kBlobSmallPayloadBytes, kBlobSmallMessagesPerSeed);
+    corpora[1] = build_blob_logical_corpus(kBlobLargePayloadBytes, kBlobLargeMessagesPerSeed);
+    return corpora;
+  }();
+
+  switch (scenario) {
+    case ScenarioKind::KBlobSmall:
+      return kBlobCorpora[0];
+    case ScenarioKind::KBlobLarge:
+      return kBlobCorpora[1];
+    case ScenarioKind::KMarketData:
+      break;
+  }
+  std::cerr << "Blob logical corpus requested for non-blob scenario.\n";
+  std::abort();
+}
+
+const LogicalCorpus<MarketDataData>& market_data_logical_corpus() {
+  static const auto kCorpus = build_market_data_logical_corpus(kMarketMessagesPerSeed);
+  return kCorpus;
+}
+
 const CorpusBundle& corpus_bundle(const BenchmarkCase& benchmark_case) {
   return corpus_bundles()[protocol_index(benchmark_case.protocol)][scenario_index(benchmark_case.scenario)];
+}
+
+ProtocolKind decode_protocol_for(EncodeProtocolKind protocol) {
+  switch (protocol) {
+    case EncodeProtocolKind::KUprRuntimeSchema:
+    case EncodeProtocolKind::KUprStaticSchema:
+      return ProtocolKind::KUprStaticSchema;
+    case EncodeProtocolKind::KPackedBinary:
+      return ProtocolKind::KPackedBinary;
+    case EncodeProtocolKind::KProtobuf:
+      return ProtocolKind::KProtobuf;
+    case EncodeProtocolKind::KFlatbuffers:
+      return ProtocolKind::KFlatbuffers;
+  }
+  unreachable();
 }
 
 std::function<uint64_t()> make_upr_runner(ProtocolKind protocol_kind,
@@ -1064,9 +1156,298 @@ std::function<uint64_t()> make_upr_runner(ProtocolKind protocol_kind,
   unreachable();
 }
 
+void write_outer_prefix(MutableByteSpan frame, size_t frame_bytes) {
+  if (frame.size() < kOuterPrefixWidthBytes) {
+    std::cerr << "Benchmark frame buffer too small for outer prefix.\n";
+    std::abort();
+  }
+  frame[0] = static_cast<std::byte>(frame_bytes & 0xFFU);
+  frame[1] = static_cast<std::byte>((frame_bytes >> 8U) & 0xFFU);
+}
+
+EncodeStatus encode_binary_blob_frame_to(const BlobEnvelopeData& message,
+                                         MutableByteSpan frame,
+                                         std::size_t* bytes_written) {
+  const size_t frame_bytes = 1U + kBlobLengthWidthBytes + message.payload.size() + 1U;
+  if (frame.size() < frame_bytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  size_t offset = 0;
+  frame[offset++] = static_cast<std::byte>(kBlobMessageType);
+  frame[offset++] = static_cast<std::byte>(message.payload.size() & 0xFFU);
+  frame[offset++] = static_cast<std::byte>((message.payload.size() >> 8U) & 0xFFU);
+  if (!message.payload.empty()) {
+    std::memcpy(frame.data() + offset, message.payload.data(), message.payload.size());
+    offset += message.payload.size();
+  }
+  frame[offset++] = static_cast<std::byte>(message.checksum);
+  if (bytes_written != nullptr) {
+    *bytes_written = offset;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_binary_market_data_frame_to(const MarketDataData& message,
+                                                MutableByteSpan frame,
+                                                std::size_t* bytes_written) {
+  constexpr size_t kFrameBytes = 1U + (sizeof(uint32_t) * 7U) + (sizeof(uint64_t) * 2U) + sizeof(double) +
+                                 kMarketSymbolBytes + 1U + kMarketChecksumWidthBytes;
+  if (frame.size() < kFrameBytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  size_t offset = 0;
+  frame[offset++] = static_cast<std::byte>(kMarketDataMessageType);
+  auto write_le32 = [&](uint32_t value) {
+    for (size_t index = 0; index < sizeof(uint32_t); ++index) {
+      frame[offset++] = static_cast<std::byte>((value >> (index * 8U)) & 0xFFU);
+    }
+  };
+  auto write_le64 = [&](uint64_t value) {
+    for (size_t index = 0; index < sizeof(uint64_t); ++index) {
+      frame[offset++] = static_cast<std::byte>((value >> (index * 8U)) & 0xFFU);
+    }
+  };
+
+  write_le32(message.instrument_id);
+  write_le32(message.sequence);
+  write_le64(message.exchange_time_ns);
+  write_le64(message.receive_time_ns);
+  write_le64(std::bit_cast<uint64_t>(message.last_price));
+  write_le32(message.last_qty);
+  write_le32(message.bid_qty);
+  write_le32(message.ask_qty);
+  write_le32(message.bid_price_micros);
+  write_le32(message.ask_price_micros);
+  for (const char character : message.symbol) {
+    frame[offset++] = static_cast<std::byte>(static_cast<uint8_t>(character));
+  }
+  frame[offset++] = static_cast<std::byte>(message.flags);
+  frame[offset++] = static_cast<std::byte>(message.checksum & 0xFFU);
+  frame[offset++] = static_cast<std::byte>((message.checksum >> 8U) & 0xFFU);
+  if (bytes_written != nullptr) {
+    *bytes_written = offset;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_protobuf_blob_frame_to(const BlobEnvelopeData& message,
+                                           proto::BlobEnvelope* encoded,
+                                           MutableByteSpan frame,
+                                           std::size_t* bytes_written) {
+  encoded->Clear();
+  encoded->set_message_type(kBlobMessageType);
+  encoded->set_payload(reinterpret_cast<const char*>(message.payload.data()), static_cast<int>(message.payload.size()));
+  encoded->set_checksum(message.checksum);
+  const size_t frame_bytes = encoded->ByteSizeLong();
+  if (frame.size() < frame_bytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  if (!encoded->SerializeToArray(frame.data(), static_cast<int>(frame_bytes))) {
+    std::cerr << "Failed to serialize protobuf BlobEnvelope.\n";
+    std::abort();
+  }
+  if (bytes_written != nullptr) {
+    *bytes_written = frame_bytes;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_protobuf_market_data_frame_to(const MarketDataData& message,
+                                                  proto::MarketData* encoded,
+                                                  MutableByteSpan frame,
+                                                  std::size_t* bytes_written) {
+  encoded->Clear();
+  encoded->set_message_type(kMarketDataMessageType);
+  encoded->set_instrument_id(message.instrument_id);
+  encoded->set_sequence(message.sequence);
+  encoded->set_exchange_time_ns(message.exchange_time_ns);
+  encoded->set_receive_time_ns(message.receive_time_ns);
+  encoded->set_last_price(message.last_price);
+  encoded->set_last_qty(message.last_qty);
+  encoded->set_bid_qty(message.bid_qty);
+  encoded->set_ask_qty(message.ask_qty);
+  encoded->set_bid_price_micros(message.bid_price_micros);
+  encoded->set_ask_price_micros(message.ask_price_micros);
+  encoded->set_symbol(symbol_string(message.symbol));
+  encoded->set_flags(message.flags);
+  encoded->set_checksum(message.checksum);
+  const size_t frame_bytes = encoded->ByteSizeLong();
+  if (frame.size() < frame_bytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  if (!encoded->SerializeToArray(frame.data(), static_cast<int>(frame_bytes))) {
+    std::cerr << "Failed to serialize protobuf MarketData.\n";
+    std::abort();
+  }
+  if (bytes_written != nullptr) {
+    *bytes_written = frame_bytes;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_flatbuffers_blob_frame_to(const BlobEnvelopeData& message,
+                                              flatbuffers::FlatBufferBuilder* builder,
+                                              MutableByteSpan frame,
+                                              std::size_t* bytes_written) {
+  builder->Clear();
+  const auto payload =
+      builder->CreateVector(reinterpret_cast<const uint8_t*>(message.payload.data()), message.payload.size());
+  const auto root = flat::CreateBlobEnvelope(*builder, kBlobMessageType, payload, message.checksum);
+  builder->Finish(root);
+  const size_t frame_bytes = builder->GetSize();
+  if (frame.size() < frame_bytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  std::memcpy(frame.data(), builder->GetBufferPointer(), frame_bytes);
+  if (bytes_written != nullptr) {
+    *bytes_written = frame_bytes;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_flatbuffers_market_data_frame_to(const MarketDataData& message,
+                                                     flatbuffers::FlatBufferBuilder* builder,
+                                                     MutableByteSpan frame,
+                                                     std::size_t* bytes_written) {
+  builder->Clear();
+  const auto symbol = builder->CreateString(symbol_string(message.symbol));
+  const auto root = flat::CreateMarketData(*builder,
+                                           kMarketDataMessageType,
+                                           message.instrument_id,
+                                           message.sequence,
+                                           message.exchange_time_ns,
+                                           message.receive_time_ns,
+                                           message.last_price,
+                                           message.last_qty,
+                                           message.bid_qty,
+                                           message.ask_qty,
+                                           message.bid_price_micros,
+                                           message.ask_price_micros,
+                                           symbol,
+                                           message.flags,
+                                           message.checksum);
+  builder->Finish(root);
+  const size_t frame_bytes = builder->GetSize();
+  if (frame.size() < frame_bytes) {
+    return EncodeStatus::kBufferTooSmall;
+  }
+  std::memcpy(frame.data(), builder->GetBufferPointer(), frame_bytes);
+  if (bytes_written != nullptr) {
+    *bytes_written = frame_bytes;
+  }
+  return EncodeStatus::kOk;
+}
+
+EncodeStatus encode_upr_blob_frame_runtime(const BlobEnvelopeData& message,
+                                           const CompiledProtocol& protocol,
+                                           const CompiledMessage& layout,
+                                           MutableByteSpan frame,
+                                           std::size_t* bytes_written) {
+  MessageBuilder builder(protocol, layout, frame);
+  if (!builder.valid()) {
+    return EncodeStatus::kInvalidData;
+  }
+  if (builder.set_unsigned(generated::BlobEnvelope::Fields::kPayloadLength, message.payload.size()) !=
+          EncodeStatus::kOk ||
+      builder.set_bytes(generated::BlobEnvelope::Fields::kPayload,
+                        ByteSpan(message.payload.data(), message.payload.size())) != EncodeStatus::kOk) {
+    return EncodeStatus::kInvalidData;
+  }
+  return builder.finalize(bytes_written);
+}
+
+EncodeStatus encode_upr_market_data_frame_runtime(const MarketDataData& message,
+                                                  const CompiledProtocol& protocol,
+                                                  const CompiledMessage& layout,
+                                                  MutableByteSpan frame,
+                                                  std::size_t* bytes_written) {
+  MessageBuilder builder(protocol, layout, frame);
+  if (!builder.valid()) {
+    return EncodeStatus::kInvalidData;
+  }
+  if (builder.set_unsigned(generated::MarketData::Fields::kInstrumentId, message.instrument_id) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kSequence, message.sequence) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kExchangeTimeNs, message.exchange_time_ns) !=
+          EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kReceiveTimeNs, message.receive_time_ns) !=
+          EncodeStatus::kOk ||
+      builder.set_float64(generated::MarketData::Fields::kLastPrice, message.last_price) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kLastQty, message.last_qty) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kBidQty, message.bid_qty) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kAskQty, message.ask_qty) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kBidPriceMicros, message.bid_price_micros) !=
+          EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kAskPriceMicros, message.ask_price_micros) !=
+          EncodeStatus::kOk ||
+      builder.set_string(generated::MarketData::Fields::kSymbol,
+                         std::string_view(message.symbol.data(), message.symbol.size())) != EncodeStatus::kOk ||
+      builder.set_unsigned(generated::MarketData::Fields::kFlags, message.flags) != EncodeStatus::kOk) {
+    return EncodeStatus::kInvalidData;
+  }
+  return builder.finalize(bytes_written);
+}
+
+EncodeStatus encode_upr_blob_frame_generated(const BlobEnvelopeData& message,
+                                             MutableByteSpan frame,
+                                             std::size_t* bytes_written) {
+  generated::BlobEnvelope::Value value{
+      .message_type = kBlobMessageType,
+      .payload_length = static_cast<uint16_t>(message.payload.size()),
+      .payload = ByteSpan(message.payload.data(), message.payload.size()),
+      .checksum = 0U,
+  };
+  return generated::BlobEnvelope::encode_value_direct(value, frame, bytes_written);
+}
+
+EncodeStatus encode_upr_market_data_frame_generated(const MarketDataData& message,
+                                                    MutableByteSpan frame,
+                                                    std::size_t* bytes_written) {
+  generated::MarketData::Value value{
+      .message_type = kMarketDataMessageType,
+      .instrument_id = message.instrument_id,
+      .sequence = message.sequence,
+      .exchange_time_ns = message.exchange_time_ns,
+      .receive_time_ns = message.receive_time_ns,
+      .last_price = message.last_price,
+      .last_qty = message.last_qty,
+      .bid_qty = message.bid_qty,
+      .ask_qty = message.ask_qty,
+      .bid_price_micros = message.bid_price_micros,
+      .ask_price_micros = message.ask_price_micros,
+      .symbol = std::string_view(message.symbol.data(), message.symbol.size()),
+      .flags = message.flags,
+      .checksum = 0U,
+  };
+  return generated::MarketData::encode_value_direct(value, frame, bytes_written);
+}
+
+template <typename Message, typename Encoder>
+uint64_t encode_messages_with_outer_prefix(const std::vector<Message>& messages,
+                                           size_t scratch_frame_bytes,
+                                           Encoder&& encode_message) {
+  std::vector<std::byte> scratch(kOuterPrefixWidthBytes + scratch_frame_bytes);
+  uint64_t folded = 0;
+  for (const Message& message : messages) {
+    std::size_t frame_bytes = 0;
+    const EncodeStatus status = encode_message(
+        message,
+        MutableByteSpan(scratch.data() + kOuterPrefixWidthBytes, scratch.size() - kOuterPrefixWidthBytes),
+        &frame_bytes);
+    if (status != EncodeStatus::kOk) {
+      std::cerr << "Benchmark encode failed with status " << to_string(status) << ".\n";
+      std::abort();
+    }
+    write_outer_prefix(MutableByteSpan(scratch.data(), kOuterPrefixWidthBytes), frame_bytes);
+    folded = fold_bytes(ByteSpan(scratch.data(), kOuterPrefixWidthBytes + frame_bytes), folded);
+  }
+  return folded;
+}
+
 }  // namespace
 
 std::span<const BenchmarkCase> benchmark_cases() { return kBenchmarkCases; }
+
+std::span<const EncodeBenchmarkCase> encode_benchmark_cases() { return kEncodeBenchmarkCases; }
 
 std::string_view to_string(ProtocolKind protocol) {
   switch (protocol) {
@@ -1086,6 +1467,22 @@ std::string_view to_string(ProtocolKind protocol) {
   unreachable();
 }
 
+std::string_view to_string(EncodeProtocolKind protocol) {
+  switch (protocol) {
+    case EncodeProtocolKind::KUprRuntimeSchema:
+      return "upr_runtime_schema";
+    case EncodeProtocolKind::KUprStaticSchema:
+      return "upr_static_schema";
+    case EncodeProtocolKind::KPackedBinary:
+      return "packed_binary";
+    case EncodeProtocolKind::KProtobuf:
+      return "protobuf_lite";
+    case EncodeProtocolKind::KFlatbuffers:
+      return "flatbuffers";
+  }
+  unreachable();
+}
+
 std::string_view to_string(ScenarioKind scenario) { return scenario_label(scenario); }
 
 CorpusMetrics corpus_metrics(const BenchmarkCase& benchmark_case) {
@@ -1098,6 +1495,13 @@ CorpusMetrics corpus_metrics(const BenchmarkCase& benchmark_case) {
                                                                    static_cast<double>(corpus.message_count),
       .seed_count = kDatasetSeeds.size(),
   };
+}
+
+CorpusMetrics corpus_metrics(const EncodeBenchmarkCase& benchmark_case) {
+  return corpus_metrics(BenchmarkCase{
+      .protocol = decode_protocol_for(benchmark_case.protocol),
+      .scenario = benchmark_case.scenario,
+  });
 }
 
 std::function<uint64_t()> make_decode_runner(const BenchmarkCase& benchmark_case) {
@@ -1152,6 +1556,133 @@ std::function<uint64_t()> make_decode_runner(const BenchmarkCase& benchmark_case
           };
       }
       break;
+  }
+  unreachable();
+}
+
+std::function<uint64_t()> make_encode_runner(const EncodeBenchmarkCase& benchmark_case) {
+  constexpr size_t kScratchFrameBytes = kBlobLargePayloadBytes + 256U;
+
+  switch (benchmark_case.scenario) {
+    case ScenarioKind::KBlobSmall:
+    case ScenarioKind::KBlobLarge: {
+      const auto* messages = &blob_logical_corpus(benchmark_case.scenario).messages;
+      const CompiledProtocol* protocol = &upr_protocol(benchmark_case.scenario);
+      const CompiledMessage* layout = protocol->find_message(generated::BlobEnvelope::kName);
+      if (layout == nullptr) {
+        std::cerr << "Benchmark blob layout missing.\n";
+        std::abort();
+      }
+      switch (benchmark_case.protocol) {
+        case EncodeProtocolKind::KUprRuntimeSchema:
+          return [messages, protocol, layout]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [protocol, layout](const BlobEnvelopeData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_upr_blob_frame_runtime(message, *protocol, *layout, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KUprStaticSchema:
+          return [messages]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [](const BlobEnvelopeData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_upr_blob_frame_generated(message, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KPackedBinary:
+          return [messages]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [](const BlobEnvelopeData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_binary_blob_frame_to(message, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KProtobuf:
+          return [messages]() mutable {
+            proto::BlobEnvelope encoded;
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [&encoded](const BlobEnvelopeData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_protobuf_blob_frame_to(message, &encoded, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KFlatbuffers:
+          return [messages]() mutable {
+            flatbuffers::FlatBufferBuilder builder(kScratchFrameBytes);
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [&builder](const BlobEnvelopeData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_flatbuffers_blob_frame_to(message, &builder, frame, written);
+                });
+          };
+      }
+      break;
+    }
+    case ScenarioKind::KMarketData: {
+      const auto* messages = &market_data_logical_corpus().messages;
+      const CompiledProtocol* protocol = &upr_protocol(benchmark_case.scenario);
+      const CompiledMessage* layout = protocol->find_message(generated::MarketData::kName);
+      if (layout == nullptr) {
+        std::cerr << "Benchmark market-data layout missing.\n";
+        std::abort();
+      }
+      switch (benchmark_case.protocol) {
+        case EncodeProtocolKind::KUprRuntimeSchema:
+          return [messages, protocol, layout]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [protocol, layout](const MarketDataData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_upr_market_data_frame_runtime(message, *protocol, *layout, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KUprStaticSchema:
+          return [messages]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [](const MarketDataData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_upr_market_data_frame_generated(message, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KPackedBinary:
+          return [messages]() {
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [](const MarketDataData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_binary_market_data_frame_to(message, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KProtobuf:
+          return [messages]() mutable {
+            proto::MarketData encoded;
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [&encoded](const MarketDataData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_protobuf_market_data_frame_to(message, &encoded, frame, written);
+                });
+          };
+        case EncodeProtocolKind::KFlatbuffers:
+          return [messages]() mutable {
+            flatbuffers::FlatBufferBuilder builder(kScratchFrameBytes);
+            return encode_messages_with_outer_prefix(
+                *messages,
+                kScratchFrameBytes,
+                [&builder](const MarketDataData& message, MutableByteSpan frame, std::size_t* written) {
+                  return encode_flatbuffers_market_data_frame_to(message, &builder, frame, written);
+                });
+          };
+      }
+      break;
+    }
   }
   unreachable();
 }

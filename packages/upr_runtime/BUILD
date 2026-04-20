@@ -11,6 +11,7 @@ cc_library(
         "src/decoder/decoded_message.cpp",
         "src/decoder/protocol_decoder.cpp",
         "src/decoder/runtime_byte_ops.cpp",
+        "src/encoder/message_encoder.cpp",
         "src/framing/fixed_size_framer.cpp",
         "src/framing/length_prefixed_framer.cpp",
     ],
@@ -49,7 +50,7 @@ cc_library(
     srcs = ["benchmarks/protocol_benchmark_support.cpp"],
     hdrs = [
         "benchmarks/protocol_benchmark_support.hpp",
-        "benchmarks/upr_benchmark_generated.hpp",
+        ":benchmark_generated_header",
     ],
     deps = [
         ":benchmark_flatbuffers_cc",
@@ -62,12 +63,26 @@ cc_library(
     ],
 )
 
+genrule(
+    name = "benchmark_generated_header",
+    srcs = ["benchmarks/benchmark_protocol.upr"],
+    outs = ["benchmarks/upr_benchmark_generated.hpp"],
+    cmd = "$(location //packages/upr_codegen:generate_bindings)" +
+          " --input $(location benchmarks/benchmark_protocol.upr)" +
+          " --output $@" +
+          " --namespace-prefix universal_protocol_runtime" +
+          " --protocol-namespace benchmarks::generated" +
+          " --header-guard UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_RUNTIME_BENCHMARKS__UPR_BENCHMARK_GENERATED_HPP_",
+    tools = ["//packages/upr_codegen:generate_bindings"],
+)
+
 cc_test(
     name = "benchmark_generated_header_test",
+    size = "small",
     srcs = ["benchmarks/benchmark_generated_header_test.cpp"],
     data = [
         "benchmarks/benchmark_protocol.upr",
-        "benchmarks/upr_benchmark_generated.hpp",
+        ":benchmark_generated_header",
     ],
     deps = [
         "//packages/upr_authoring",

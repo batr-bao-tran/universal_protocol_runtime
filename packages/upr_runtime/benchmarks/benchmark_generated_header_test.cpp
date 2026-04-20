@@ -34,6 +34,7 @@ std::string read_file(const std::filesystem::path& path) {
 
 TEST(BenchmarkGeneratedHeaderTest, MatchesGeneratedBindingsFromSchema) {
   const std::filesystem::path schema_path = benchmark_artifact_path("benchmark_protocol.upr");
+  // Produced by the :benchmark_generated_header genrule
   const std::filesystem::path header_path = benchmark_artifact_path("upr_benchmark_generated.hpp");
 
   upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_file(schema_path.string());

@@ -1,5 +1,6 @@
 #include "universal_protocol_runtime/codegen/bindings_generator.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <iomanip>
@@ -654,6 +655,57 @@ std::string cpp_direct_checksum_call(std::string_view algorithm_name, std::strin
   return {};
 }
 
+bool checksum_uses_prefix_shortcut(const CompiledChecksum& checksum) {
+  return checksum.from.kind == ChecksumAnchorKind::kFrameStart && checksum.to.kind == ChecksumAnchorKind::kBeforeSelf &&
+         checksum.to.field_id == checksum.field_id;
+}
+
+bool encode_layout_needs_checksum_field_arrays(const CompiledMessage& layout) {
+  return std::any_of(layout.checksums().begin(), layout.checksums().end(), [](const CompiledChecksum& checksum) {
+    return !checksum_uses_prefix_shortcut(checksum);
+  });
+}
+
+std::optional<size_t> fixed_field_offset(const CompiledMessage& layout, FieldId field_id) {
+  if (field_id > layout.fields().size()) {
+    return std::nullopt;
+  }
+  size_t offset = 0;
+  for (FieldId index = 0; index < field_id; ++index) {
+    const CompiledField& field = layout.fields()[index];
+    if (field.dynamic_size) {
+      return std::nullopt;
+    }
+    offset += field.minimum_size_contribution();
+  }
+  return offset;
+}
+
+std::optional<size_t> checksum_static_span_size(const CompiledMessage& layout, const CompiledChecksum& checksum) {
+  if (!checksum_uses_prefix_shortcut(checksum)) {
+    return std::nullopt;
+  }
+  return fixed_field_offset(layout, checksum.field_id);
+}
+
+std::string checksum_field_offset_name(const CompiledField& field) {
+  return sanitize_namespace_name(field.name) + "_offset";
+}
+
+std::string cpp_direct_fixed_checksum_call(std::string_view algorithm_name,
+                                           std::string_view data_expression,
+                                           size_t static_size) {
+  if (algorithm_name == "xor8") {
+    return "universal_protocol_runtime::direct_encode_support::checksum_xor8_fixed<" + std::to_string(static_size) +
+           ">(" + std::string(data_expression) + ")";
+  }
+  if (algorithm_name == "sum16") {
+    return "universal_protocol_runtime::direct_encode_support::checksum_sum16_fixed<" + std::to_string(static_size) +
+           ">(" + std::string(data_expression) + ")";
+  }
+  return {};
+}
+
 std::string cpp_checksum_anchor_expression(const CompiledMessage& layout,
                                            const CompiledChecksumAnchor& anchor,
                                            std::string_view checksum_limit_expression) {
@@ -963,6 +1015,288 @@ void append_cpp_direct_decode_function(
   append_line(out, indent, "}");
 }
 
+void append_cpp_direct_encode_function(
+    std::string* out, const CompiledMessage& layout, bool /* is_message */, bool supports_direct, int indent) {
+  append_line(
+      out,
+      indent,
+      "static constexpr bool kSupportsDirectValueEncode = " + std::string(supports_direct ? "true" : "false") + ";");
+  if (!supports_direct) {
+    append_line(out, indent, "static universal_protocol_runtime::EncodeStatus encode_value_direct(");
+    append_line(out, indent + 1, "const Value& /*value*/,");
+    append_line(out, indent + 1, "universal_protocol_runtime::MutableByteSpan /*frame*/,");
+    append_line(out, indent + 1, "std::size_t* /*bytes_written*/ = nullptr) {");
+    append_line(out, indent + 1, "return universal_protocol_runtime::EncodeStatus::kInvalidData;");
+    append_line(out, indent, "}");
+    return;
+  }
+
+  auto is_checksum_field_enc = [&](FieldId fid) -> bool {
+    return std::any_of(layout.checksums().begin(), layout.checksums().end(), [fid](const CompiledChecksum& c) {
+      return c.field_id == fid;
+    });
+  };
+  const bool needs_checksum_field_arrays = encode_layout_needs_checksum_field_arrays(layout);
+
+  append_line(out, indent, "static universal_protocol_runtime::EncodeStatus encode_value_direct(");
+  append_line(out, indent + 1, "const Value& value,");
+  append_line(out, indent + 1, "universal_protocol_runtime::MutableByteSpan frame,");
+  append_line(out, indent + 1, "std::size_t* bytes_written = nullptr) {");
+  append_line(out, indent + 1, "std::size_t total_size = 0;");
+  for (const CompiledField& field : layout.fields()) {
+    const std::string field_name = sanitize_namespace_name(field.name);
+    const std::string field_size_constant_name = sanitize_cpp_constant_name(field.name) + "Size";
+    if (field.kind == FieldKind::kBytes || field.kind == FieldKind::kString) {
+      if (field.dynamic_size) {
+        append_line_cat(out, indent + 1, "const auto ", field_name, "_size = value.", field_name, ".size();");
+        append_line(out, indent + 1, "if (" + field_name + "_size > frame.size() - total_size) {");
+        append_line(out, indent + 2, "return universal_protocol_runtime::EncodeStatus::kBufferTooSmall;");
+        append_line(out, indent + 1, "}");
+        append_line_cat(out, indent + 1, "total_size += ", field_name, "_size;");
+      } else {
+        append_line(
+            out,
+            indent + 1,
+            "constexpr std::size_t " + field_size_constant_name + " = " + std::to_string(field.fixed_size) + ";");
+        append_line(out, indent + 1, "total_size += " + field_size_constant_name + ";");
+      }
+    } else {
+      append_line(
+          out,
+          indent + 1,
+          "constexpr std::size_t " + field_size_constant_name + " = " + std::to_string(field.width_bytes) + ";");
+      append_line(out, indent + 1, "total_size += " + field_size_constant_name + ";");
+    }
+  }
+  append_line(out, indent + 1, "if (frame.size() < total_size) {");
+  append_line(out, indent + 2, "return universal_protocol_runtime::EncodeStatus::kBufferTooSmall;");
+  append_line(out, indent + 1, "}");
+  if (!layout.checksums().empty() && needs_checksum_field_arrays) {
+    append_line(
+        out, indent + 1, "std::array<std::size_t, " + std::to_string(layout.fields().size()) + "> field_starts{};");
+    append_line(
+        out, indent + 1, "std::array<std::size_t, " + std::to_string(layout.fields().size()) + "> field_ends{};");
+  }
+  append_line(out, indent + 1, "std::byte* cursor = frame.data();");
+  append_line(out, indent + 1, "std::size_t offset = 0;");
+
+  for (const CompiledField& field : layout.fields()) {
+    const std::string field_name = sanitize_namespace_name(field.name);
+    const std::string field_constant_name = cpp_field_constant_name(field);
+    const std::string field_size_constant_name = sanitize_cpp_constant_name(field.name) + "Size";
+    if (!layout.checksums().empty() && needs_checksum_field_arrays) {
+      append_line(out, indent + 1, "field_starts[" + field_constant_name + "] = offset;");
+    } else if (is_checksum_field_enc(field.id)) {
+      const auto checksum_it =
+          std::find_if(layout.checksums().begin(), layout.checksums().end(), [&](const CompiledChecksum& checksum) {
+            return checksum.field_id == field.id;
+          });
+      if (checksum_it != layout.checksums().end() && checksum_uses_prefix_shortcut(*checksum_it)) {
+        append_line(out, indent + 1, "const std::size_t " + checksum_field_offset_name(field) + " = offset;");
+      }
+    }
+    if (is_checksum_field_enc(field.id)) {
+      append_line(out,
+                  indent + 1,
+                  "universal_protocol_runtime::direct_encode_support::fill_zeros("
+                  "universal_protocol_runtime::MutableByteSpan(cursor, " +
+                      field_size_constant_name + "));");
+      append_line(out, indent + 1, "cursor += " + field_size_constant_name + ";");
+      append_line(out, indent + 1, "offset += " + field_size_constant_name + ";");
+    } else if (field.kind == FieldKind::kBytes || field.kind == FieldKind::kString) {
+      if (field.dynamic_size) {
+        append_line(out, indent + 1, "if (" + field_name + "_size > 0U) {");
+        append_line_cat(out,
+                        indent + 2,
+                        "universal_protocol_runtime::direct_encode_support::write_bytes_unchecked(",
+                        "universal_protocol_runtime::MutableByteSpan(cursor, ",
+                        field_name,
+                        "_size), universal_protocol_runtime::ByteSpan(",
+                        "reinterpret_cast<const std::byte*>(value.",
+                        field_name,
+                        ".data()), ",
+                        field_name,
+                        "_size));");
+        append_line(out, indent + 1, "}");
+        append_line_cat(out, indent + 1, "cursor += ", field_name, "_size;");
+        append_line(out, indent + 1, "offset += " + field_name + "_size;");
+      } else {
+        append_line(out, indent + 1, "if (" + field_size_constant_name + " > 0U) {");
+        append_line_cat(out,
+                        indent + 2,
+                        "universal_protocol_runtime::direct_encode_support::write_bytes_unchecked(",
+                        "universal_protocol_runtime::MutableByteSpan(cursor, ",
+                        field_size_constant_name,
+                        "), universal_protocol_runtime::ByteSpan(",
+                        "reinterpret_cast<const std::byte*>(value.",
+                        field_name,
+                        ".data()), ",
+                        field_size_constant_name,
+                        "));");
+        append_line(out, indent + 1, "}");
+        append_line(out, indent + 1, "cursor += " + field_size_constant_name + ";");
+        append_line(out, indent + 1, "offset += " + field_size_constant_name + ";");
+      }
+    } else {
+      switch (field.kind) {
+        case FieldKind::kUnsigned:
+        case FieldKind::kEnum: {
+          const std::string value_expr = field.has_expected_unsigned
+                                             ? std::to_string(field.expected_unsigned) + "ULL"
+                                             : "static_cast<uint64_t>(value." + field_name + ")";
+          append_line_cat(out,
+                          indent + 1,
+                          "universal_protocol_runtime::direct_encode_support::write_unsigned_scalar_unchecked<",
+                          cpp_byte_order_literal(field.byte_order),
+                          ", ",
+                          std::to_string(field.width_bytes),
+                          ">(universal_protocol_runtime::MutableByteSpan(cursor, ",
+                          std::to_string(field.width_bytes),
+                          "), ",
+                          value_expr,
+                          ");");
+          break;
+        }
+        case FieldKind::kSigned:
+          append_line_cat(out,
+                          indent + 1,
+                          "universal_protocol_runtime::direct_encode_support::write_unsigned_scalar_unchecked<",
+                          cpp_byte_order_literal(field.byte_order),
+                          ", ",
+                          std::to_string(field.width_bytes),
+                          ">(universal_protocol_runtime::MutableByteSpan(cursor, ",
+                          std::to_string(field.width_bytes),
+                          "), static_cast<uint64_t>(value.",
+                          field_name,
+                          "));");
+          break;
+        case FieldKind::kFloat32:
+          append_line_cat(out,
+                          indent + 1,
+                          "universal_protocol_runtime::direct_encode_support::write_float32_unchecked<",
+                          cpp_byte_order_literal(field.byte_order),
+                          ">(universal_protocol_runtime::MutableByteSpan(cursor, ",
+                          std::to_string(field.width_bytes),
+                          "), value.",
+                          field_name,
+                          ");");
+          break;
+        case FieldKind::kFloat64:
+          append_line_cat(out,
+                          indent + 1,
+                          "universal_protocol_runtime::direct_encode_support::write_float64_unchecked<",
+                          cpp_byte_order_literal(field.byte_order),
+                          ">(universal_protocol_runtime::MutableByteSpan(cursor, ",
+                          std::to_string(field.width_bytes),
+                          "), value.",
+                          field_name,
+                          ");");
+          break;
+        case FieldKind::kBytes:
+        case FieldKind::kString:
+        case FieldKind::kStruct:
+          break;
+      }
+      append_line(out, indent + 1, "cursor += " + field_size_constant_name + ";");
+      append_line(out, indent + 1, "offset += " + field_size_constant_name + ";");
+    }
+    if (!layout.checksums().empty() && needs_checksum_field_arrays) {
+      append_line(out, indent + 1, "field_ends[" + field_constant_name + "] = offset;");
+    }
+  }
+
+  for (const CompiledChecksum& checksum : layout.checksums()) {
+    const std::string chk_field_name = sanitize_namespace_name(layout.fields()[checksum.field_id].name);
+    const std::string from_name = chk_field_name + "_checksum_from";
+    const std::string to_name = chk_field_name + "_checksum_to";
+    std::string checksum_value_expr;
+    std::string destination_offset_expr;
+    if (checksum_uses_prefix_shortcut(checksum)) {
+      destination_offset_expr = checksum_field_offset_name(layout.fields()[checksum.field_id]);
+      append_line_cat(out, indent + 1, "const std::size_t ", from_name, " = 0U;");
+      if (const auto static_span = checksum_static_span_size(layout, checksum); static_span.has_value()) {
+        const std::string fixed_call =
+            cpp_direct_fixed_checksum_call(checksum.algorithm_name, "frame.data() + " + from_name, *static_span);
+        if (!fixed_call.empty()) {
+          checksum_value_expr = fixed_call;
+        }
+      }
+      if (checksum_value_expr.empty()) {
+        append_line_cat(out, indent + 1, "const std::size_t ", to_name, " = ", destination_offset_expr, ";");
+      }
+    } else {
+      destination_offset_expr = "field_starts[" + cpp_field_constant_name(layout.fields()[checksum.field_id]) + "]";
+      append_line_cat(out,
+                      indent + 1,
+                      "const std::size_t ",
+                      from_name,
+                      " = ",
+                      cpp_checksum_anchor_expression(layout, checksum.from, "offset"),
+                      ";");
+      append_line_cat(out,
+                      indent + 1,
+                      "const std::size_t ",
+                      to_name,
+                      " = ",
+                      cpp_checksum_anchor_expression(layout, checksum.to, "offset"),
+                      ";");
+    }
+    if (checksum_value_expr.empty()) {
+      std::string chk_slice_expr;
+      chk_slice_expr.reserve(64U + (from_name.size() * 2U) + to_name.size());
+      chk_slice_expr += "universal_protocol_runtime::ByteSpan(frame.data() + ";
+      chk_slice_expr += from_name;
+      chk_slice_expr += ", ";
+      chk_slice_expr += to_name;
+      chk_slice_expr += " - ";
+      chk_slice_expr += from_name;
+      chk_slice_expr += ")";
+      checksum_value_expr = cpp_direct_checksum_call(checksum.algorithm_name, chk_slice_expr);
+    }
+    append_line_cat(out,
+                    indent + 1,
+                    "universal_protocol_runtime::direct_encode_support::write_unsigned_scalar_unchecked<",
+                    cpp_byte_order_literal(layout.fields()[checksum.field_id].byte_order),
+                    ", ",
+                    std::to_string(checksum.result_width_bytes),
+                    ">(universal_protocol_runtime::MutableByteSpan(frame.data() + ",
+                    destination_offset_expr,
+                    ", ",
+                    std::to_string(checksum.result_width_bytes),
+                    "), ",
+                    checksum_value_expr,
+                    ");");
+  }
+
+  append_line(out, indent + 1, "if (bytes_written != nullptr) {");
+  append_line(out, indent + 2, "*bytes_written = total_size;");
+  append_line(out, indent + 1, "}");
+  append_line(out, indent + 1, "return universal_protocol_runtime::EncodeStatus::kOk;");
+  append_line(out, indent, "}");
+}
+
+void append_cpp_encoder_binding_class(std::string* out, const CompiledMessage& /* layout */, int indent) {
+  append_line(out, indent, "class Encoder final {");
+  append_line(out, indent, " public:");
+  append_line(out, indent + 1, "explicit Encoder(const universal_protocol_runtime::ProtocolEncoder& encoder)");
+  append_line(out, indent + 2, ": layout_(encoder.find_message(kName)) {}");
+  append_line(out, indent + 1, "bool available() const { return layout_ != nullptr; }");
+  append_line(out, indent + 1, "universal_protocol_runtime::EncodeStatus encode(const Value& value,");
+  append_line(out, indent + 2, "universal_protocol_runtime::MutableByteSpan frame,");
+  append_line(out, indent + 2, "std::size_t* bytes_written = nullptr) const {");
+  append_line(out, indent + 2, "if (!available()) {");
+  append_line(out, indent + 3, "return universal_protocol_runtime::EncodeStatus::kSchemaMismatch;");
+  append_line(out, indent + 2, "}");
+  append_line(out, indent + 2, "if constexpr (kSupportsDirectValueEncode) {");
+  append_line(out, indent + 3, "return encode_value_direct(value, frame, bytes_written);");
+  append_line(out, indent + 2, "}");
+  append_line(out, indent + 2, "return universal_protocol_runtime::EncodeStatus::kInvalidData;");
+  append_line(out, indent + 1, "}");
+  append_line(out, indent, " private:");
+  append_line(out, indent + 1, "const universal_protocol_runtime::CompiledMessage* layout_ = nullptr;");
+  append_line(out, indent, "};");
+}
+
 void append_cpp_view_binding(
     std::string* out, const CompiledMessage& layout, bool is_message, bool supports_direct_value_decode, int indent) {
   append_line(out, indent, "struct Value final {");
@@ -971,6 +1305,7 @@ void append_cpp_view_binding(
   }
   append_line(out, indent, "};");
   append_cpp_direct_decode_function(out, layout, is_message, supports_direct_value_decode, indent);
+  append_cpp_direct_encode_function(out, layout, is_message, layout_supports_direct_value_decode(layout), indent);
   append_line(out);
   append_line(out, indent, "class View final {");
   append_line(out, indent, " public:");
@@ -1075,6 +1410,7 @@ void append_cpp_view_binding(
   append_line(out, indent + 1, "const universal_protocol_runtime::ProtocolDecoder* decoder_ = nullptr;");
   append_line(out, indent + 1, "const universal_protocol_runtime::CompiledMessage* layout_ = nullptr;");
   append_line(out, indent, "};");
+  append_cpp_encoder_binding_class(out, layout, indent);
 }
 
 void append_cpp_layout_binding(
@@ -1264,6 +1600,7 @@ StatusOr<std::string> generate_cpp_bindings_header(const CompiledProtocol& proto
   append_line(&out, 0, "#include <array>");
   append_line(&out, 0, "#include <cstddef>");
   append_line(&out, 0, "#include <cstdint>");
+  append_line(&out, 0, "#include <cstring>");
   append_line(&out, 0, "#include <optional>");
   append_line(&out, 0, "#include <span>");
   append_line(&out, 0, "#include <string_view>");
@@ -1272,6 +1609,9 @@ StatusOr<std::string> generate_cpp_bindings_header(const CompiledProtocol& proto
   append_line(&out, 0, "#include \"universal_protocol_runtime/decoder/decoded_message.hpp\"");
   append_line(&out, 0, "#include \"universal_protocol_runtime/decoder/direct_decode_support.hpp\"");
   append_line(&out, 0, "#include \"universal_protocol_runtime/decoder/protocol_decoder.hpp\"");
+  append_line(&out, 0, "#include \"universal_protocol_runtime/encoder/direct_encode_support.hpp\"");
+  append_line(&out, 0, "#include \"universal_protocol_runtime/encoder/encode_status.hpp\"");
+  append_line(&out, 0, "#include \"universal_protocol_runtime/encoder/message_encoder.hpp\"");
   append_line(&out);
   append_line(&out, 0, "namespace " + namespace_prefix + " {");
   append_line(&out, 0, "namespace " + protocol_namespace + " {");
