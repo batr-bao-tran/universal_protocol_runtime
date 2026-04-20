@@ -8,14 +8,32 @@
 namespace universal_protocol_runtime {
 
 struct PosixTransportOptions {
+  /**
+   * @brief Indicates whether the transport closes the provided handle.
+   */
   bool own_handle = true;
+  /**
+   * @brief Enables non-blocking mode when true.
+   */
   bool non_blocking = false;
 };
 
+/**
+ * @brief POSIX file-descriptor transport adapter.
+ */
 class PosixFdTransport final : public ITransport {
  public:
+  /**
+   * @brief Constructs an empty fd transport.
+   */
   PosixFdTransport() = default;
+  /**
+   * @brief Constructs a transport from an existing fd.
+   */
   explicit PosixFdTransport(int fd, PosixTransportOptions options = {});
+  /**
+   * @brief Destroys the transport and closes owned resources.
+   */
   ~PosixFdTransport() noexcept override;
 
   PosixFdTransport(const PosixFdTransport&) = delete;
@@ -23,15 +41,33 @@ class PosixFdTransport final : public ITransport {
   PosixFdTransport(PosixFdTransport&& other) noexcept;
   PosixFdTransport& operator=(PosixFdTransport&& other) noexcept;
 
+  /**
+   * @brief Opens a device path and wraps its descriptor.
+   */
   static StatusOr<PosixFdTransport> open_device(const std::string& path,
                                                 int open_flags,
                                                 PosixTransportOptions options = {});
 
+  /**
+   * @brief Reads bytes from the descriptor.
+   */
   ReadResult read(MutableByteSpan destination) override;
+  /**
+   * @brief Indicates whether the descriptor is open.
+   */
   bool is_open() const override;
 
+  /**
+   * @brief Returns the native file descriptor.
+   */
   int native_handle() const { return fd_; }
+  /**
+   * @brief Closes the transport descriptor.
+   */
   Status close();
+  /**
+   * @brief Waits until the descriptor is readable.
+   */
   StatusOr<bool> wait_until_readable(int timeout_ms) const;
 
  private:
