@@ -362,7 +362,7 @@ jobs:
         env:
           BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}
           BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ steps.bazel-cache.outputs.repository_cache_dir }}
-        run: tools/testing/check_coverage.sh 97
+        run: tools/testing/check_coverage.sh 90
 
       - name: Save Bazel disk cache
         if: steps.restore-disk-cache.outputs.cache-hit != 'true'

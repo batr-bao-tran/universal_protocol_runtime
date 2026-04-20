@@ -31,3 +31,35 @@ cc_library(
     sha256 = "dce5756f20c03202ad48de43ff306629f7e0dd2bed204dfa2967ea13fcab296e",
     urls = ["https://github.com/simdutf/simdutf/releases/download/v8.2.0/singleheader.zip"],
 )
+
+http_archive(
+    name = "liburing",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "liburing",
+    srcs = [
+        "src/queue.c",
+        "src/register.c",
+        "src/setup.c",
+        "src/syscall.c",
+        "src/version.c",
+    ],
+    hdrs = glob([
+        "src/include/**/*.h",
+        "src/*.h",
+        "src/arch/**/*.h",
+    ]),
+    copts = ["-D_GNU_SOURCE"],
+    includes = ["src/include"],
+)
+""",
+    patch_cmds = [
+        "cat > src/include/liburing/compat.h <<'EOF'\n/* SPDX-License-Identifier: MIT */\n#ifndef LIBURING_COMPAT_H\n#define LIBURING_COMPAT_H\n\n#include <linux/time_types.h>\n#define UAPI_LINUX_IO_URING_H_SKIP_LINUX_TIME_TYPES_H 1\n#include <linux/openat2.h>\n\n#endif\nEOF",
+        "cat > src/include/liburing/io_uring_version.h <<'EOF'\n/* SPDX-License-Identifier: MIT */\n#ifndef LIBURING_VERSION_H\n#define LIBURING_VERSION_H\n\n#define IO_URING_VERSION_MAJOR 2\n#define IO_URING_VERSION_MINOR 6\n\n#endif\nEOF",
+    ],
+    sha256 = "682f06733e6db6402c1f904cbbe12b94942a49effc872c9e01db3d7b180917cc",
+    strip_prefix = "liburing-liburing-2.6",
+    urls = ["https://github.com/axboe/liburing/archive/refs/tags/liburing-2.6.tar.gz"],
+)

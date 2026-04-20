@@ -15,6 +15,12 @@ build --copt=-Wno-error=unused-parameter
 build --cxxopt=-Wno-error=unused-parameter
 build --host_cxxopt=-Wno-error=unused-parameter
 
+# Suppress warnings from third-party code.
+build --per_file_copt=external/protobuf+/.*@-w
+build --per_file_copt=external/abseil-cpp+/.*@-w
+build --host_per_file_copt=external/protobuf+/.*@-w
+build --host_per_file_copt=external/abseil-cpp+/.*@-w
+
 build:sanitize --compilation_mode=dbg
 build:sanitize --strip=never
 build:sanitize --repo_env=CC=clang

@@ -22,6 +22,10 @@ bool supports_eager_scalar_cache(const CompiledField& field) {
       return field.width_bytes == sizeof(uint32_t);
     case FieldKind::kFloat64:
       return field.width_bytes == sizeof(uint64_t);
+    case FieldKind::kBytes:
+    case FieldKind::kString:
+    case FieldKind::kStruct:
+      return false;
   }
   return false;  // LCOV_EXCL_LINE
 }
