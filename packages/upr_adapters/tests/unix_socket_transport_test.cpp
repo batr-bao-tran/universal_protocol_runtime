@@ -15,6 +15,8 @@ namespace upr = universal_protocol_runtime;
 
 namespace {
 
+inline constexpr int kSocketTimeoutMs = 3000;
+
 TEST(UnixSocketTransportTest, SocketPairSupportsReadWriteAndReadiness) {
   auto pair = upr::UnixSocketTransport::create_socket_pair();
   ASSERT_TRUE(pair.ok()) << pair.status().message();
@@ -78,9 +80,13 @@ TEST(UnixSocketTransportTest, ListenerAcceptsConnectionsOnFilesystemPath) {
   auto accepted = listener.value().accept();
   ASSERT_TRUE(accepted.ok()) << accepted.status().message();
 
+  const auto readable = accepted.value()->wait_until_readable(kSocketTimeoutMs);
+  ASSERT_TRUE(readable.ok()) << readable.status().message();
+  ASSERT_TRUE(readable.value());
   std::array<std::byte, 1> buffer{};
   const upr::ReadResult read_result = accepted.value()->read(buffer);
   ASSERT_TRUE(read_result.status.ok()) << read_result.status.message();
+  EXPECT_EQ(read_result.bytes_read, 1U);
   EXPECT_EQ(buffer[0], std::byte{'x'});
 
   client_thread.join();

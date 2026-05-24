@@ -1,6 +1,6 @@
 protocol: market_data
 imports:
-  - examples/order_types.yaml
+  - examples/schema/order_types.yaml
 messages:
   - name: Order
     fields:

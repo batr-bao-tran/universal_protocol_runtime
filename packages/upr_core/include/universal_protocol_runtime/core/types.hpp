@@ -26,6 +26,8 @@ enum class FieldKind {
   kString,
   kStruct,
   kEnum,
+  kCollection,
+  kVariant,
 };
 
 using FieldId = uint16_t;
@@ -68,6 +70,10 @@ constexpr std::string_view to_string(FieldKind kind) noexcept {
       return "struct";
     case FieldKind::kEnum:
       return "enum";
+    case FieldKind::kCollection:
+      return "collection";
+    case FieldKind::kVariant:
+      return "variant";
   }
   return "unknown";
 }

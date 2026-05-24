@@ -17,6 +17,26 @@
 namespace universal_protocol_runtime {
 
 class ProtocolDecoder;
+class DecodedMessage;
+
+class DecodedCollectionView {
+ public:
+  DecodedCollectionView() = default;
+  ~DecodedCollectionView() noexcept = default;
+
+  bool valid() const noexcept { return protocol_ != nullptr && element_layout_ != nullptr; }
+  size_t count() const noexcept { return count_; }
+  ByteSpan raw() const noexcept { return frame_; }
+  std::optional<DecodedMessage> at(size_t index) const;
+
+ private:
+  friend class DecodedMessage;
+
+  const CompiledProtocol* protocol_ = nullptr;
+  const CompiledMessage* element_layout_ = nullptr;
+  ByteSpan frame_;
+  size_t count_ = 0;
+};
 
 class DecodedMessage {
  public:
@@ -41,6 +61,9 @@ class DecodedMessage {
 
   std::optional<BitFieldId> bit_field_id(std::string_view name) const;
 
+  bool is_present(FieldId field_id) const;
+  bool is_present(std::string_view name) const;
+
   std::optional<uint64_t> get_unsigned(FieldId field_id) const;
   std::optional<int64_t> get_signed(FieldId field_id) const;
   std::optional<float> get_float32(FieldId field_id) const;
@@ -49,6 +72,8 @@ class DecodedMessage {
   std::optional<std::string_view> get_string_view(FieldId field_id) const;
   std::optional<std::string_view> get_enum_name(FieldId field_id) const;
   std::optional<DecodedMessage> get_struct(FieldId field_id) const;
+  std::optional<DecodedCollectionView> get_collection(FieldId field_id) const;
+  std::optional<DecodedMessage> get_variant(FieldId field_id) const;
 
   std::optional<uint64_t> get_bit_unsigned(BitFieldId bit_field_id) const;
   std::optional<int64_t> get_bit_signed(BitFieldId bit_field_id) const;
@@ -62,6 +87,8 @@ class DecodedMessage {
   std::optional<std::string_view> get_string_view(std::string_view name) const;
   std::optional<std::string_view> get_enum_name(std::string_view name) const;
   std::optional<DecodedMessage> get_struct(std::string_view name) const;
+  std::optional<DecodedCollectionView> get_collection(std::string_view name) const;
+  std::optional<DecodedMessage> get_variant(std::string_view name) const;
 
   std::optional<uint64_t> get_bit_unsigned(std::string_view name) const;
   std::optional<int64_t> get_bit_signed(std::string_view name) const;
@@ -169,23 +196,33 @@ class DecodedMessage {
 
  private:
   friend class ProtocolDecoder;
+  friend class DecodedCollectionView;
 
   const CompiledField* field_definition(FieldId field_id) const;
   const CompiledBitField* bit_field_definition(BitFieldId bit_field_id) const;
   std::optional<ResolvedField> resolved_field(FieldId field_id) const;
   std::optional<uint64_t> cached_scalar_raw(FieldId field_id) const;
+  std::optional<uint64_t> raw_unsigned(FieldId field_id) const;
+  bool condition_matches(const CompiledField& field) const;
+  bool presence_matches(const CompiledField& field) const;
   void eager_cache_scalar(FieldId field_id, ByteSpan field_bytes);
+  bool field_selected(FieldId field_id) const;
   DecodeStatus assign_from_layout(const CompiledProtocol& protocol,
                                   const CompiledMessage& layout,
                                   ByteSpan frame,
-                                  size_t* bytes_consumed);
+                                  size_t* bytes_consumed,
+                                  const std::array<bool, kMaxFieldsPerMessage>* selected_fields = nullptr,
+                                  bool allow_prefix_trailing = false);
 
   const CompiledProtocol* protocol_ = nullptr;
   const CompiledMessage* message_ = nullptr;
   ByteSpan frame_;
   std::array<ResolvedField, kMaxFieldsPerMessage> resolved_fields_{};
+  std::array<bool, kMaxFieldsPerMessage> field_present_{};
   mutable std::array<uint64_t, kMaxFieldsPerMessage> scalar_cache_values_{};
   mutable std::array<bool, kMaxFieldsPerMessage> scalar_cache_valid_{};
+  std::array<bool, kMaxFieldsPerMessage> selected_fields_{};
+  bool selection_active_ = false;
   size_t field_count_ = 0;
 };
 

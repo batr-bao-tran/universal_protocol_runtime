@@ -236,15 +236,15 @@ std::string summarize_strategy(size_t common_prefix_length,
                                const std::optional<LengthFieldInference>& length_field,
                                bool allow_trailing_bytes) {
   std::ostringstream stream;
-  stream << "common_prefix=" << common_prefix_length << " min_size=" << minimum_size << " max_size=" << maximum_size;
+  stream << "common_prefix=" << common_prefix_length << ", min_size=" << minimum_size << ", max_size=" << maximum_size;
   if (length_field.has_value()) {
-    stream << " length_field=offset:" << length_field->offset
+    stream << ", length_field=offset:" << length_field->offset
            << "/width:" << static_cast<unsigned>(length_field->width_bytes)
-           << " trailing_fixed=" << length_field->trailing_fixed_bytes;
+           << ", trailing_fixed=" << length_field->trailing_fixed_bytes;
   } else if (allow_trailing_bytes) {
-    stream << " trailing_bytes=allowed";
+    stream << ", trailing_bytes=allowed";
   } else {
-    stream << " fixed_size=yes";
+    stream << ", fixed_size=yes";
   }
   return stream.str();
 }

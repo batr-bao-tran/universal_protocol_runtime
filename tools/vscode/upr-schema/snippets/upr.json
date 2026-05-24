@@ -32,5 +32,51 @@
       "${1:checksum}: ${2:uint16} checksum(${3:sum16})"
     ],
     "description": "Create a checksum field"
+  },
+  "Repeating Group": {
+    "prefix": "collection",
+    "body": [
+      "struct ${1:Level} {",
+      "  ${2:price}: uint32",
+      "  ${3:qty}: uint32",
+      "}",
+      "",
+      "message ${4:Snapshot} {",
+      "  ${5:count}: uint8",
+      "  ${6:levels}: ${1:Level}[${5:count}]",
+      "}"
+    ],
+    "description": "Create a repeating-group collection"
+  },
+  "Tagged Variant": {
+    "prefix": "variant",
+    "body": [
+      "message ${1:Event} {",
+      "  ${2:kind}: uint8",
+      "  ${3:detail}: variant(${2:kind}) {",
+      "    ${4:1} = ${5:QuoteDetail},",
+      "    ${6:2} = ${7:TradeDetail}",
+      "  }",
+      "}"
+    ],
+    "description": "Create a tagged variant field"
+  },
+  "Presence Field": {
+    "prefix": "present",
+    "body": [
+      "message ${1:Quote} {",
+      "  ${2:presence}: uint8",
+      "  ${3:note_len}: uint8 present(${2:presence}, ${4:0})",
+      "  ${5:note}: utf8[${3:note_len}] present(${2:presence}, ${4:0})",
+      "}"
+    ],
+    "description": "Create a presence-gated optional field"
+  },
+  "Validation Rule": {
+    "prefix": "validate",
+    "body": [
+      "validate(${1:payload_len} == ${2:item_count} * ${3:4}, if(${4:version} == ${5:2}))"
+    ],
+    "description": "Create a layout validation rule"
   }
 }

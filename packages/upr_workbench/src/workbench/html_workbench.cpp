@@ -109,8 +109,7 @@ void append_protocol_definition_section(std::string* out, const ProtocolDefiniti
 
 void append_compiled_protocol_section(std::string* out, const CompiledProtocol& protocol) {
   append(out, "<section class=\"panel filterable\"><h2>Compiled Protocol</h2>");
-  append(out,
-         "<p class=\"section-intro\">The immutable runtime view consumed by the decoder and generated bindings.</p>");
+  append(out, "<p class=\"section-intro\">The immutable runtime view consumed by the decoder.</p>");
   append(out, "<div class=\"metric-row\">");
   append_metric(out, "Protocol", protocol.name());
   append_metric(out, "Fingerprint", std::to_string(protocol.fingerprint()));

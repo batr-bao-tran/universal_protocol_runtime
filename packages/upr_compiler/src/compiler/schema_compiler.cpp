@@ -1,5 +1,6 @@
 #include "universal_protocol_runtime/compiler/schema_compiler.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <string>
@@ -28,6 +29,15 @@ constexpr std::string_view kChecksumAnchorBeforeSelf = "before_self";
 constexpr std::string_view kChecksumAnchorAfterSelf = "after_self";
 constexpr std::string_view kChecksumAnchorStartSuffix = ".start";
 constexpr std::string_view kChecksumAnchorEndSuffix = ".end";
+constexpr uint64_t kMaxDenseVariantLookupSpan = 256U;
+
+size_t align_up(size_t value, size_t alignment) {
+  if (alignment <= 1U) {
+    return value;
+  }
+  const size_t remainder = value % alignment;
+  return remainder == 0U ? value : (value + (alignment - remainder));
+}
 
 }  // namespace
 
@@ -35,14 +45,18 @@ CompiledMessage::CompiledMessage(std::string name,
                                  std::vector<CompiledField> fields,
                                  std::vector<CompiledBitField> bit_fields,
                                  std::vector<CompiledChecksum> checksums,
+                                 std::vector<CompiledValidationRule> validations,
                                  size_t minimum_size,
+                                 bool has_fixed_size,
                                  bool allow_trailing_bytes,
                                  std::vector<std::byte> dispatch_prefix)
     : name_(std::move(name)),
       fields_(std::move(fields)),
       bit_fields_(std::move(bit_fields)),
       checksums_(std::move(checksums)),
+      validations_(std::move(validations)),
       minimum_size_(minimum_size),
+      has_fixed_size_(has_fixed_size),
       allow_trailing_bytes_(allow_trailing_bytes),
       dispatch_prefix_(std::move(dispatch_prefix)) {
   field_ids_.reserve(fields_.size());
@@ -54,6 +68,59 @@ CompiledMessage::CompiledMessage(std::string name,
     bit_field_ids_.emplace(bit_field.name, bit_field.id);
   }
 }
+
+CompiledMessage::CompiledMessage(std::string name,
+                                 std::vector<CompiledField> fields,
+                                 std::vector<CompiledBitField> bit_fields,
+                                 std::vector<CompiledChecksum> checksums,
+                                 std::vector<CompiledValidationRule> validations,
+                                 size_t minimum_size,
+                                 bool allow_trailing_bytes,
+                                 std::vector<std::byte> dispatch_prefix)
+    : CompiledMessage(std::move(name),
+                      std::move(fields),
+                      std::move(bit_fields),
+                      std::move(checksums),
+                      std::move(validations),
+                      minimum_size,
+                      true,
+                      allow_trailing_bytes,
+                      std::move(dispatch_prefix)) {}
+
+CompiledMessage::CompiledMessage(std::string name,
+                                 std::vector<CompiledField> fields,
+                                 std::vector<CompiledBitField> bit_fields,
+                                 std::vector<CompiledChecksum> checksums,
+                                 size_t minimum_size,
+                                 bool has_fixed_size,
+                                 bool allow_trailing_bytes,
+                                 std::vector<std::byte> dispatch_prefix)
+    : CompiledMessage(std::move(name),
+                      std::move(fields),
+                      std::move(bit_fields),
+                      std::move(checksums),
+                      {},
+                      minimum_size,
+                      has_fixed_size,
+                      allow_trailing_bytes,
+                      std::move(dispatch_prefix)) {}
+
+CompiledMessage::CompiledMessage(std::string name,
+                                 std::vector<CompiledField> fields,
+                                 std::vector<CompiledBitField> bit_fields,
+                                 std::vector<CompiledChecksum> checksums,
+                                 size_t minimum_size,
+                                 bool allow_trailing_bytes,
+                                 std::vector<std::byte> dispatch_prefix)
+    : CompiledMessage(std::move(name),
+                      std::move(fields),
+                      std::move(bit_fields),
+                      std::move(checksums),
+                      {},
+                      minimum_size,
+                      true,
+                      allow_trailing_bytes,
+                      std::move(dispatch_prefix)) {}
 
 std::optional<FieldId> CompiledMessage::find_field(std::string_view field_name) const {
   const auto it = field_ids_.find(field_name);
@@ -171,6 +238,12 @@ void fingerprint_field(XxHash64State* hasher, const FieldDefinition& field) {
   hasher->update_integral(field.fixed_size);
   hasher->update(field.size_from_field);
   hasher->update(field.referenced_type);
+  hasher->update_integral(field.alignment);
+  hasher->update_bool(field.is_reserved);
+  hasher->update_integral(field.reserved_fill_byte);
+  hasher->update_integral(field.fixed_count);
+  hasher->update(field.count_from_field);
+  hasher->update(field.tag_from_field);
   hasher->update_bool(field.has_expected_unsigned);
   hasher->update_integral(field.expected_unsigned);
   for (const EnumValueDefinition& enum_value : field.enum_values) {
@@ -185,6 +258,34 @@ void fingerprint_field(XxHash64State* hasher, const FieldDefinition& field) {
     hasher->update(field.checksum->algorithm);
     hasher->update(field.checksum->from);
     hasher->update(field.checksum->to);
+  }
+  hasher->update_bool(field.condition.has_value());
+  if (field.condition.has_value()) {
+    hasher->update(field.condition->field);
+    hasher->update_integral(field.condition->equals_unsigned);
+  }
+  hasher->update_bool(field.presence.has_value());
+  if (field.presence.has_value()) {
+    hasher->update(field.presence->field);
+    hasher->update_integral(field.presence->bit_index);
+  }
+  for (const VariantCaseDefinition& variant_case : field.variant_cases) {
+    hasher->update_integral(variant_case.tag_value);
+    hasher->update(variant_case.referenced_type);
+  }
+}
+
+void fingerprint_validation_rule(XxHash64State* hasher, const ValidationRuleDefinition& rule) {
+  hasher->update(rule.field);
+  hasher->update_integral(rule.op);
+  hasher->update(rule.other_field);
+  hasher->update_bool(rule.compare_to_field);
+  hasher->update_integral(rule.value);
+  hasher->update_integral(rule.multiplier);
+  hasher->update_bool(rule.when.has_value());
+  if (rule.when.has_value()) {
+    hasher->update(rule.when->field);
+    hasher->update_integral(rule.when->equals_unsigned);
   }
 }
 
@@ -215,6 +316,7 @@ Status validate_protocol_definition(const ProtocolDefinition& definition) {
 struct LayoutDefinitionView {
   std::string_view name;
   const std::vector<FieldDefinition>* fields = nullptr;
+  const std::vector<ValidationRuleDefinition>* validations = nullptr;
   bool allow_trailing_bytes = false;
   std::string_view kind_name;
 };
@@ -227,6 +329,24 @@ struct PendingChecksum {
 };
 
 using FieldIdMap = std::unordered_map<std::string, FieldId, TransparentStringHash, std::equal_to<>>;
+
+StatusOr<CompiledValidationOperator> compile_validation_operator(ValidationOperator op) {
+  switch (op) {
+    case ValidationOperator::kEq:
+      return CompiledValidationOperator::kEq;
+    case ValidationOperator::kNe:
+      return CompiledValidationOperator::kNe;
+    case ValidationOperator::kLt:
+      return CompiledValidationOperator::kLt;
+    case ValidationOperator::kLe:
+      return CompiledValidationOperator::kLe;
+    case ValidationOperator::kGt:
+      return CompiledValidationOperator::kGt;
+    case ValidationOperator::kGe:
+      return CompiledValidationOperator::kGe;
+  }
+  return invalid_argument("Unsupported validation operator.");
+}
 
 CompiledChecksum::BuiltinKind checksum_builtin_kind(std::string_view algorithm) noexcept {
   if (algorithm == "xor8") {
@@ -278,6 +398,7 @@ class ProtocolCompiler {
       const auto compiled_message = compile_layout(LayoutDefinitionView{
           .name = message.name,
           .fields = &message.fields,
+          .validations = &message.validations,
           .allow_trailing_bytes = message.allow_trailing_bytes,
           .kind_name = kLayoutKindMessage,
       });
@@ -351,6 +472,7 @@ class ProtocolCompiler {
     const auto compiled_struct = compile_layout(LayoutDefinitionView{
         .name = struct_definition.name,
         .fields = &struct_definition.fields,
+        .validations = &struct_definition.validations,
         .allow_trailing_bytes = false,
         .kind_name = kLayoutKindStruct,
     });
@@ -429,8 +551,10 @@ class ProtocolCompiler {
     std::vector<CompiledField> compiled_fields;
     std::vector<CompiledBitField> compiled_bit_fields;
     std::vector<PendingChecksum> pending_checksums;
+    std::vector<CompiledValidationRule> compiled_validations;
     std::vector<std::byte> dispatch_prefix;
     size_t minimum_size = 0;
+    bool has_fixed_size = true;
     bool collecting_dispatch_prefix = true;
 
     field_names.reserve(layout.fields->size());
@@ -455,9 +579,17 @@ class ProtocolCompiler {
       compiled_field.byte_order = field.byte_order;
       compiled_field.string_encoding = field.string_encoding;
       compiled_field.fixed_size = field.fixed_size;
+      compiled_field.alignment = field.alignment == 0 ? 1U : field.alignment;
+      compiled_field.is_reserved = field.is_reserved;
+      compiled_field.reserved_fill_byte = field.reserved_fill_byte;
       compiled_field.has_expected_unsigned = field.has_expected_unsigned;
       compiled_field.expected_unsigned = field.expected_unsigned;
       compiled_field.enum_values = field.enum_values;
+
+      if ((compiled_field.alignment & (compiled_field.alignment - 1U)) != 0U) {
+        return invalid_argument("Field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                std::string(layout.name) + "' must use a power-of-two alignment.");
+      }
 
       if (compiled_field.kind == FieldKind::kBytes || compiled_field.kind == FieldKind::kString) {
         if (field.has_expected_unsigned) {
@@ -485,6 +617,24 @@ class ProtocolCompiler {
         }
         if (!field.bit_fields.empty()) {
           return invalid_argument("Bitfields are only supported on scalar containers.");
+        }
+        if (field.fixed_count != 0 || !field.count_from_field.empty()) {
+          return invalid_argument("Byte and string fields use 'size'/'size_from', not collection counts.");
+        }
+        if (!field.tag_from_field.empty() || !field.variant_cases.empty()) {
+          return invalid_argument("Byte and string fields do not support variant declarations.");
+        }
+        if (compiled_field.is_reserved) {
+          if (compiled_field.kind != FieldKind::kBytes || compiled_field.dynamic_size ||
+              compiled_field.fixed_size == 0U) {
+            return invalid_argument("Reserved fields must be fixed-size byte ranges.");
+          }
+          if (field.checksum.has_value() || field.condition.has_value() || field.presence.has_value()) {
+            return invalid_argument("Reserved fields cannot use checksum, conditional, or presence modifiers.");
+          }
+        }
+        if (compiled_field.dynamic_size) {
+          has_fixed_size = false;
         }
       } else if (compiled_field.kind == FieldKind::kStruct) {
         if (field.referenced_type.empty()) {
@@ -520,8 +670,140 @@ class ProtocolCompiler {
           }
           compiled_field.struct_id = compiled_struct_id.value();
           compiled_field.fixed_size = compiled_structs_[compiled_struct_id.value()].minimum_size();
+          if (!compiled_structs_[compiled_struct_id.value()].has_fixed_size()) {
+            has_fixed_size = false;
+          }
+        }
+        if (field.fixed_count != 0 || !field.count_from_field.empty()) {
+          return invalid_argument("Struct fields do not support collection counts; use a repeated collection field.");
+        }
+        if (!field.tag_from_field.empty() || !field.variant_cases.empty()) {
+          return invalid_argument("Struct fields do not support variant declarations.");
+        }
+      } else if (compiled_field.kind == FieldKind::kCollection) {
+        if (field.referenced_type.empty()) {
+          return invalid_argument("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) + "' must reference a struct type.");
+        }
+        if ((field.fixed_count == 0) == field.count_from_field.empty()) {
+          return invalid_argument("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) +
+                                  "' must declare exactly one of a fixed count or 'count_from'.");
+        }
+        if (field.has_expected_unsigned || field.checksum.has_value() || !field.bit_fields.empty()) {
+          return invalid_argument("Collection field '" + field.name + "' cannot use scalar-only modifiers.");
+        }
+        if (!field.tag_from_field.empty() || !field.variant_cases.empty()) {
+          return invalid_argument("Collection field '" + field.name + "' cannot declare variant cases.");
+        }
+        const auto struct_it = struct_ids_.find(field.referenced_type);
+        if (struct_it == struct_ids_.end()) {
+          return not_found("Unknown struct type: " + field.referenced_type);
+        }
+        const auto compiled_struct_id = compile_struct(struct_it->second);
+        if (!compiled_struct_id.ok()) {
+          return compiled_struct_id.status();
+        }
+        const CompiledMessage& element_layout = compiled_structs_[compiled_struct_id.value()];
+        compiled_field.struct_id = compiled_struct_id.value();
+        compiled_field.element_minimum_size = element_layout.minimum_size();
+        compiled_field.fixed_count = field.fixed_count;
+        if (!field.count_from_field.empty()) {
+          const auto it = field_ids.find(field.count_from_field);
+          if (it == field_ids.end()) {
+            return invalid_argument("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                    std::string(layout.name) + "' must reference a prior count field.");
+          }
+          const CompiledField& dependency = compiled_fields[it->second];
+          if (dependency.kind != FieldKind::kUnsigned && dependency.kind != FieldKind::kEnum) {
+            return invalid_argument("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                    std::string(layout.name) +
+                                    "' must use an unsigned or enum field as its count source.");
+          }
+          compiled_field.dynamic_count = true;
+          compiled_field.count_from_field = dependency.id;
+          has_fixed_size = false;
+          compiled_field.fixed_size = 0;
+        } else {
+          compiled_field.fixed_size = compiled_field.fixed_count * compiled_field.element_minimum_size;
+          if (!element_layout.has_fixed_size()) {
+            has_fixed_size = false;
+          }
+        }
+      } else if (compiled_field.kind == FieldKind::kVariant) {
+        if (field.tag_from_field.empty() || field.variant_cases.empty()) {
+          return invalid_argument("Variant field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) + "' requires 'tag_from' and at least one case.");
+        }
+        if (field.has_expected_unsigned || field.checksum.has_value() || !field.bit_fields.empty() ||
+            field.fixed_size != 0 || !field.size_from_field.empty() || field.fixed_count != 0 ||
+            !field.count_from_field.empty()) {
+          return invalid_argument("Variant field '" + field.name + "' cannot use unrelated field modifiers.");
+        }
+        const auto tag_it = field_ids.find(field.tag_from_field);
+        if (tag_it == field_ids.end()) {
+          return invalid_argument("Variant field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) + "' must reference a prior tag field.");
+        }
+        const CompiledField& tag_field = compiled_fields[tag_it->second];
+        if (tag_field.kind != FieldKind::kUnsigned && tag_field.kind != FieldKind::kEnum) {
+          return invalid_argument("Variant field '" + field.name + "' must use an unsigned or enum tag field.");
+        }
+        compiled_field.tag_from_field = tag_field.id;
+        bool first_case = true;
+        bool all_cases_fixed = true;
+        size_t first_fixed_size = 0;
+        for (const VariantCaseDefinition& variant_case : field.variant_cases) {
+          const auto struct_it = struct_ids_.find(variant_case.referenced_type);
+          if (struct_it == struct_ids_.end()) {
+            return not_found("Unknown struct type: " + variant_case.referenced_type);
+          }
+          const auto compiled_struct_id = compile_struct(struct_it->second);
+          if (!compiled_struct_id.ok()) {
+            return compiled_struct_id.status();
+          }
+          const CompiledMessage& case_layout = compiled_structs_[compiled_struct_id.value()];
+          compiled_field.variant_cases.push_back(CompiledVariantCase{
+              .tag_value = variant_case.tag_value,
+              .struct_id = compiled_struct_id.value(),
+          });
+          if (first_case || case_layout.minimum_size() < compiled_field.fixed_size) {
+            compiled_field.fixed_size = case_layout.minimum_size();
+          }
+          if (first_case) {
+            first_fixed_size = case_layout.minimum_size();
+            first_case = false;
+          }
+          if (!case_layout.has_fixed_size() || case_layout.minimum_size() != first_fixed_size) {
+            all_cases_fixed = false;
+          }
+        }
+        std::sort(compiled_field.variant_cases.begin(),
+                  compiled_field.variant_cases.end(),
+                  [](const CompiledVariantCase& lhs, const CompiledVariantCase& rhs) {
+                    return lhs.tag_value < rhs.tag_value;
+                  });
+        if (!compiled_field.variant_cases.empty()) {
+          const uint64_t min_tag = compiled_field.variant_cases.front().tag_value;
+          const uint64_t max_tag = compiled_field.variant_cases.back().tag_value;
+          const uint64_t span = max_tag - min_tag + 1U;
+          if (span <= kMaxDenseVariantLookupSpan) {
+            compiled_field.variant_lookup_base = min_tag;
+            compiled_field.variant_lookup_indices.assign(static_cast<size_t>(span),
+                                                         CompiledField::kVariantLookupMissing);
+            for (size_t case_index = 0; case_index < compiled_field.variant_cases.size(); ++case_index) {
+              compiled_field.variant_lookup_indices[static_cast<size_t>(
+                  compiled_field.variant_cases[case_index].tag_value - min_tag)] = static_cast<uint32_t>(case_index);
+            }
+          }
+        }
+        if (!all_cases_fixed) {
+          has_fixed_size = false;
         }
       } else {
+        if (compiled_field.is_reserved) {
+          return invalid_argument("Reserved fill semantics are only supported on byte fields.");
+        }
         if (!is_valid_scalar_width(compiled_field.width_bytes)) {
           return invalid_argument("Scalar field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
                                   std::string(layout.name) + "' has an unsupported width.");
@@ -532,9 +814,54 @@ class ProtocolCompiler {
         if (compiled_field.kind == FieldKind::kFloat64 && compiled_field.width_bytes != kFloat64WidthBytes) {
           return invalid_argument("float64 fields must be 8 bytes wide.");
         }
+        if (field.fixed_count != 0 || !field.count_from_field.empty()) {
+          return invalid_argument("Scalar field '" + field.name + "' cannot declare collection counts.");
+        }
+        if (!field.tag_from_field.empty() || !field.variant_cases.empty()) {
+          return invalid_argument("Scalar field '" + field.name + "' cannot declare variant cases.");
+        }
+      }
+
+      if (field.condition.has_value()) {
+        const auto it = field_ids.find(field.condition->field);
+        if (it == field_ids.end()) {
+          return invalid_argument("Conditional field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) + "' must reference a prior condition field.");
+        }
+        const CompiledField& dependency = compiled_fields[it->second];
+        if (dependency.kind != FieldKind::kUnsigned && dependency.kind != FieldKind::kEnum) {
+          return invalid_argument("Conditional field '" + field.name + "' must depend on an unsigned or enum field.");
+        }
+        compiled_field.has_condition = true;
+        compiled_field.condition_field = dependency.id;
+        compiled_field.condition_equals = field.condition->equals_unsigned;
+        has_fixed_size = false;
+      }
+      if (field.presence.has_value()) {
+        const auto it = field_ids.find(field.presence->field);
+        if (it == field_ids.end()) {
+          return invalid_argument("Presence-gated field '" + field.name + "' in " + std::string(layout.kind_name) +
+                                  " '" + std::string(layout.name) + "' must reference a prior presence field.");
+        }
+        const CompiledField& dependency = compiled_fields[it->second];
+        if (dependency.kind != FieldKind::kUnsigned && dependency.kind != FieldKind::kEnum) {
+          return invalid_argument("Presence-gated field '" + field.name +
+                                  "' must depend on an unsigned or enum field.");
+        }
+        const uint16_t dependency_bits =
+            static_cast<uint16_t>(dependency.width_bytes) * static_cast<uint16_t>(kBitsPerByte);
+        if (field.presence->bit_index >= dependency_bits) {
+          return invalid_argument("Presence bit for field '" + field.name + "' exceeds the width of field '" +
+                                  field.presence->field + "'.");
+        }
+        compiled_field.has_presence = true;
+        compiled_field.presence_field = dependency.id;
+        compiled_field.presence_bit = field.presence->bit_index;
+        has_fixed_size = false;
       }
 
       field_ids.emplace(field.name, compiled_field.id);
+      minimum_size = align_up(minimum_size, compiled_field.alignment);
       minimum_size += compiled_field.minimum_size_contribution();
       if (collecting_dispatch_prefix && compiled_field.is_scalar() && compiled_field.has_expected_unsigned) {
         append_expected_scalar_bytes(
@@ -612,6 +939,65 @@ class ProtocolCompiler {
       compiled_fields.push_back(std::move(compiled_field));
     }
 
+    if (layout.validations != nullptr) {
+      compiled_validations.reserve(layout.validations->size());
+      for (const ValidationRuleDefinition& rule : *layout.validations) {
+        const auto left_it = field_ids.find(rule.field);
+        if (left_it == field_ids.end()) {
+          return invalid_argument("Validation in " + std::string(layout.kind_name) + " '" + std::string(layout.name) +
+                                  "' references unknown field '" + rule.field + "'.");
+        }
+        const CompiledField& left_field = compiled_fields[left_it->second];
+        if (left_field.kind != FieldKind::kUnsigned && left_field.kind != FieldKind::kEnum) {
+          return invalid_argument("Validation field '" + rule.field + "' must be unsigned or enum typed.");
+        }
+        if (rule.multiplier == 0U) {
+          return invalid_argument("Validation multiplier must be non-zero.");
+        }
+        const auto compiled_op = compile_validation_operator(rule.op);
+        if (!compiled_op.ok()) {
+          return compiled_op.status();
+        }
+        CompiledValidationRule compiled_rule;
+        compiled_rule.field_id = left_field.id;
+        compiled_rule.op = compiled_op.value();
+        compiled_rule.multiplier = rule.multiplier;
+        if (rule.compare_to_field) {
+          const auto right_it = field_ids.find(rule.other_field);
+          if (right_it == field_ids.end()) {
+            return invalid_argument("Validation in " + std::string(layout.kind_name) + " '" + std::string(layout.name) +
+                                    "' references unknown field '" + rule.other_field + "'.");
+          }
+          const CompiledField& right_field = compiled_fields[right_it->second];
+          if (right_field.kind != FieldKind::kUnsigned && right_field.kind != FieldKind::kEnum) {
+            return invalid_argument("Validation comparison field '" + rule.other_field +
+                                    "' must be unsigned or enum typed.");
+          }
+          compiled_rule.compare_to_field = true;
+          compiled_rule.other_field_id = right_field.id;
+        } else {
+          compiled_rule.value = rule.value;
+        }
+        if (rule.when.has_value()) {
+          const auto when_it = field_ids.find(rule.when->field);
+          if (when_it == field_ids.end()) {
+            return invalid_argument("Validation condition in " + std::string(layout.kind_name) + " '" +
+                                    std::string(layout.name) + "' references unknown field '" + rule.when->field +
+                                    "'.");
+          }
+          const CompiledField& when_field = compiled_fields[when_it->second];
+          if (when_field.kind != FieldKind::kUnsigned && when_field.kind != FieldKind::kEnum) {
+            return invalid_argument("Validation condition field '" + rule.when->field +
+                                    "' must be unsigned or enum typed.");
+          }
+          compiled_rule.has_when = true;
+          compiled_rule.when_field_id = when_field.id;
+          compiled_rule.when_equals = rule.when->equals_unsigned;
+        }
+        compiled_validations.push_back(compiled_rule);
+      }
+    }
+
     std::vector<CompiledChecksum> compiled_checksums;
     compiled_checksums.reserve(pending_checksums.size());
     for (const PendingChecksum& pending : pending_checksums) {
@@ -638,7 +1024,9 @@ class ProtocolCompiler {
                            std::move(compiled_fields),
                            std::move(compiled_bit_fields),
                            std::move(compiled_checksums),
+                           std::move(compiled_validations),
                            minimum_size,
+                           has_fixed_size,
                            layout.allow_trailing_bytes,
                            std::move(dispatch_prefix));
   }
@@ -652,6 +1040,9 @@ class ProtocolCompiler {
       for (const FieldDefinition& field : struct_definition.fields) {
         fingerprint_field(&hasher, field);
       }
+      for (const ValidationRuleDefinition& validation : struct_definition.validations) {
+        fingerprint_validation_rule(&hasher, validation);
+      }
     }
     for (const EnumDefinition& enum_definition : definition_.enums) {
       fingerprint_enum(&hasher, enum_definition);
@@ -662,6 +1053,9 @@ class ProtocolCompiler {
       hasher.update_bool(message.allow_trailing_bytes);
       for (const FieldDefinition& field : message.fields) {
         fingerprint_field(&hasher, field);
+      }
+      for (const ValidationRuleDefinition& validation : message.validations) {
+        fingerprint_validation_rule(&hasher, validation);
       }
     }
     return hasher.digest();

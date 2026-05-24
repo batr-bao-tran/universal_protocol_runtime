@@ -15,6 +15,7 @@ bazel-*
 *.exe
 *.out
 *.app
+*.html
 
 # Coverage / profiling
 *.gcno

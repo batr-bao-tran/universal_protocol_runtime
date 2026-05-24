@@ -1,6 +1,8 @@
 #include "universal_protocol_runtime/adapters/upr_session.hpp"
 
 #include <array>
+#include <chrono>
+#include <thread>
 
 namespace universal_protocol_runtime {
 namespace {
@@ -28,6 +30,25 @@ Integer decode_le(ByteSpan bytes, size_t offset) {
   return static_cast<Integer>(value);
 }
 
+inline constexpr auto kHandshakePollDelay = std::chrono::milliseconds(1);
+inline constexpr auto kHandshakeTimeout = std::chrono::seconds(5);
+
+Status receive_handshake_frame(FrameChannel* channel, std::vector<std::byte>* frame, const char* error_message) {
+  const auto deadline = std::chrono::steady_clock::now() + kHandshakeTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const FrameChannelPollResult poll_result = channel->receive_frame(frame);
+    if (poll_result.status == FrameChannelPollStatus::kFrameReady) {
+      return Status::ok_status();
+    }
+    if (poll_result.status != FrameChannelPollStatus::kWouldBlock &&
+        poll_result.status != FrameChannelPollStatus::kNeedMoreData) {
+      return io_error(error_message);
+    }
+    std::this_thread::sleep_for(kHandshakePollDelay);
+  }
+  return exhausted(error_message);
+}
+
 }  // namespace
 
 Status UprSession::client_handshake(const UprSessionHandshake& local, UprSessionHandshake* remote) {
@@ -37,16 +58,9 @@ Status UprSession::client_handshake(const UprSessionHandshake& local, UprSession
     return send_status;
   }
   std::vector<std::byte> response;
-  while (true) {
-    const FrameChannelPollResult poll_result = channel_->receive_frame(&response);
-    if (poll_result.status == FrameChannelPollStatus::kFrameReady) {
-      break;
-    }
-    if (poll_result.status == FrameChannelPollStatus::kWouldBlock ||
-        poll_result.status == FrameChannelPollStatus::kNeedMoreData) {
-      continue;
-    }
-    return io_error("Server handshake response failed.");
+  const Status receive_status = receive_handshake_frame(channel_, &response, "Server handshake response failed.");
+  if (!receive_status.ok()) {
+    return receive_status;
   }
   StatusOr<UprSessionHandshake> decoded = decode_handshake(ByteSpan(response.data(), response.size()));
   if (!decoded.ok()) {
@@ -62,16 +76,9 @@ Status UprSession::client_handshake(const UprSessionHandshake& local, UprSession
 
 Status UprSession::server_handshake(const UprSessionHandshake& local, UprSessionHandshake* remote) {
   std::vector<std::byte> request;
-  while (true) {
-    const FrameChannelPollResult poll_result = channel_->receive_frame(&request);
-    if (poll_result.status == FrameChannelPollStatus::kFrameReady) {
-      break;
-    }
-    if (poll_result.status == FrameChannelPollStatus::kWouldBlock ||
-        poll_result.status == FrameChannelPollStatus::kNeedMoreData) {
-      continue;
-    }
-    return io_error("Client handshake request failed.");
+  const Status receive_status = receive_handshake_frame(channel_, &request, "Client handshake request failed.");
+  if (!receive_status.ok()) {
+    return receive_status;
   }
   StatusOr<UprSessionHandshake> decoded = decode_handshake(ByteSpan(request.data(), request.size()));
   if (!decoded.ok()) {

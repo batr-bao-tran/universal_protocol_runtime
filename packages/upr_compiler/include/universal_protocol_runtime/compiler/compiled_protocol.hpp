@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -70,7 +71,35 @@ struct CompiledChecksum {
   CompiledChecksumAnchor to;
 };
 
+struct CompiledVariantCase {
+  uint64_t tag_value = 0;
+  size_t struct_id = 0;
+};
+
+enum class CompiledValidationOperator {
+  kEq,
+  kNe,
+  kLt,
+  kLe,
+  kGt,
+  kGe,
+};
+
+struct CompiledValidationRule {
+  FieldId field_id = 0;
+  CompiledValidationOperator op = CompiledValidationOperator::kEq;
+  FieldId other_field_id = 0;
+  bool compare_to_field = false;
+  uint64_t value = 0;
+  uint64_t multiplier = 1;
+  bool has_when = false;
+  FieldId when_field_id = 0;
+  uint64_t when_equals = 0;
+};
+
 struct CompiledField {
+  static constexpr uint32_t kVariantLookupMissing = std::numeric_limits<uint32_t>::max();
+
   FieldId id = 0;
   std::string name;
   FieldKind kind = FieldKind::kUnsigned;
@@ -81,6 +110,23 @@ struct CompiledField {
   bool dynamic_size = false;
   FieldId size_from_field = 0;
   size_t struct_id = 0;
+  size_t alignment = 1;
+  bool is_reserved = false;
+  uint8_t reserved_fill_byte = 0;
+  size_t element_minimum_size = 0;
+  size_t fixed_count = 0;
+  bool dynamic_count = false;
+  FieldId count_from_field = 0;
+  bool has_condition = false;
+  FieldId condition_field = 0;
+  uint64_t condition_equals = 0;
+  bool has_presence = false;
+  FieldId presence_field = 0;
+  uint8_t presence_bit = 0;
+  FieldId tag_from_field = 0;
+  std::vector<CompiledVariantCase> variant_cases;
+  uint64_t variant_lookup_base = 0;
+  std::vector<uint32_t> variant_lookup_indices;
   bool has_expected_unsigned = false;
   uint64_t expected_unsigned = 0;
   std::vector<EnumValueDefinition> enum_values;
@@ -90,7 +136,15 @@ struct CompiledField {
            kind == FieldKind::kFloat64 || kind == FieldKind::kEnum;
   }
 
+  constexpr bool is_conditionally_present() const noexcept { return has_condition || has_presence; }
+
   constexpr size_t minimum_size_contribution() const noexcept {
+    if (is_conditionally_present()) {
+      return 0;
+    }
+    if (kind == FieldKind::kCollection || kind == FieldKind::kVariant) {
+      return fixed_size;
+    }
     if (dynamic_size) {
       return 0;
     }
@@ -110,6 +164,31 @@ class CompiledMessage {
                   std::vector<CompiledField> fields,
                   std::vector<CompiledBitField> bit_fields,
                   std::vector<CompiledChecksum> checksums,
+                  std::vector<CompiledValidationRule> validations,
+                  size_t minimum_size,
+                  bool has_fixed_size,
+                  bool allow_trailing_bytes,
+                  std::vector<std::byte> dispatch_prefix = {});
+  CompiledMessage(std::string name,
+                  std::vector<CompiledField> fields,
+                  std::vector<CompiledBitField> bit_fields,
+                  std::vector<CompiledChecksum> checksums,
+                  std::vector<CompiledValidationRule> validations,
+                  size_t minimum_size,
+                  bool allow_trailing_bytes,
+                  std::vector<std::byte> dispatch_prefix = {});
+  CompiledMessage(std::string name,
+                  std::vector<CompiledField> fields,
+                  std::vector<CompiledBitField> bit_fields,
+                  std::vector<CompiledChecksum> checksums,
+                  size_t minimum_size,
+                  bool has_fixed_size,
+                  bool allow_trailing_bytes,
+                  std::vector<std::byte> dispatch_prefix = {});
+  CompiledMessage(std::string name,
+                  std::vector<CompiledField> fields,
+                  std::vector<CompiledBitField> bit_fields,
+                  std::vector<CompiledChecksum> checksums,
                   size_t minimum_size,
                   bool allow_trailing_bytes,
                   std::vector<std::byte> dispatch_prefix = {});
@@ -120,6 +199,8 @@ class CompiledMessage {
 
   size_t minimum_size() const { return minimum_size_; }
 
+  bool has_fixed_size() const { return has_fixed_size_; }
+
   bool allow_trailing_bytes() const { return allow_trailing_bytes_; }
 
   std::span<const std::byte> dispatch_prefix() const { return dispatch_prefix_; }
@@ -127,6 +208,8 @@ class CompiledMessage {
   const std::vector<CompiledBitField>& bit_fields() const { return bit_fields_; }
 
   const std::vector<CompiledChecksum>& checksums() const { return checksums_; }
+
+  const std::vector<CompiledValidationRule>& validations() const { return validations_; }
 
   std::optional<FieldId> find_field(std::string_view field_name) const;
 
@@ -137,7 +220,9 @@ class CompiledMessage {
   std::vector<CompiledField> fields_;
   std::vector<CompiledBitField> bit_fields_;
   std::vector<CompiledChecksum> checksums_;
+  std::vector<CompiledValidationRule> validations_;
   size_t minimum_size_ = 0;
+  bool has_fixed_size_ = false;
   bool allow_trailing_bytes_ = false;
   std::vector<std::byte> dispatch_prefix_;
   std::unordered_map<std::string, FieldId, TransparentStringHash, std::equal_to<>> field_ids_;

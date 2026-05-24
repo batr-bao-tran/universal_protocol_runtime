@@ -1,0 +1,11 @@
+protocol hardware_telemetry
+
+message SensorPacket {
+  message_type: uint8 = 16
+  version: uint8
+  pad: reserved[2] align(4)
+  sample_bytes_len: uint16
+  sample_count: uint8
+  sample_bytes: bytes[sample_bytes_len]
+  validate(sample_bytes_len == sample_count * 4, if(version == 2))
+}

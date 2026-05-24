@@ -28,6 +28,40 @@ struct ChecksumDefinition {
   std::string to = "before_self";
 };
 
+struct ConditionDefinition {
+  std::string field;
+  uint64_t equals_unsigned = 0;
+};
+
+struct PresenceDefinition {
+  std::string field;
+  uint8_t bit_index = 0;
+};
+
+enum class ValidationOperator {
+  kEq,
+  kNe,
+  kLt,
+  kLe,
+  kGt,
+  kGe,
+};
+
+struct ValidationRuleDefinition {
+  std::string field;
+  ValidationOperator op = ValidationOperator::kEq;
+  std::string other_field;
+  bool compare_to_field = false;
+  uint64_t value = 0;
+  uint64_t multiplier = 1;
+  std::optional<ConditionDefinition> when;
+};
+
+struct VariantCaseDefinition {
+  uint64_t tag_value = 0;
+  std::string referenced_type;
+};
+
 struct EnumDefinition {
   std::string name;
   uint8_t width_bytes = 0;
@@ -44,23 +78,35 @@ struct FieldDefinition {
   size_t fixed_size = 0;
   std::string size_from_field;
   std::string referenced_type;
+  size_t alignment = 1;
+  bool is_reserved = false;
+  uint8_t reserved_fill_byte = 0;
+  size_t fixed_count = 0;
+  std::string count_from_field;
+  std::string tag_from_field;
   bool has_expected_unsigned = false;
   uint64_t expected_unsigned = 0;
   std::vector<EnumValueDefinition> enum_values;
   std::vector<BitFieldDefinition> bit_fields;
   std::optional<ChecksumDefinition> checksum;
+  std::optional<ConditionDefinition> condition;
+  std::optional<PresenceDefinition> presence;
+  std::vector<VariantCaseDefinition> variant_cases;
 
   bool is_dynamic_size() const { return !size_from_field.empty(); }
+  bool is_dynamic_count() const { return !count_from_field.empty(); }
 };
 
 struct StructDefinition {
   std::string name;
   std::vector<FieldDefinition> fields;
+  std::vector<ValidationRuleDefinition> validations;
 };
 
 struct MessageDefinition {
   std::string name;
   std::vector<FieldDefinition> fields;
+  std::vector<ValidationRuleDefinition> validations;
   bool allow_trailing_bytes = false;
 };
 

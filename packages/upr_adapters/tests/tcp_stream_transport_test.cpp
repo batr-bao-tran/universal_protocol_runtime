@@ -13,12 +13,14 @@ namespace upr = universal_protocol_runtime;
 
 namespace {
 
+inline constexpr int kNetworkTimeoutMs(3000);
+
 TEST(TcpStreamTransportTest, ConnectsToLoopbackListenerAndTransfersBytes) {
   auto listener = upr::TcpListener::bind_loopback(0);
   ASSERT_TRUE(listener.ok()) << listener.status().message();
 
   std::thread server_thread([&]() {
-    auto ready = listener.value().wait_for_connection(1000);
+    const auto ready = listener.value().wait_for_connection(kNetworkTimeoutMs);
     ASSERT_TRUE(ready.ok()) << ready.status().message();
     ASSERT_TRUE(ready.value());
     auto accepted = listener.value().accept();
@@ -36,7 +38,7 @@ TEST(TcpStreamTransportTest, ConnectsToLoopbackListenerAndTransfersBytes) {
   auto client = upr::TcpStreamTransport::connect_to_host("127.0.0.1", listener.value().port());
   ASSERT_TRUE(client.ok()) << client.status().message();
 
-  auto readable = client.value().wait_until_readable(1000);
+  auto readable = client.value().wait_until_readable(kNetworkTimeoutMs);
   ASSERT_TRUE(readable.ok()) << readable.status().message();
   EXPECT_TRUE(readable.value());
 
@@ -54,11 +56,14 @@ TEST(TcpStreamTransportTest, SupportsVectoredWriteOverLoopbackConnection) {
   ASSERT_TRUE(listener.ok()) << listener.status().message();
 
   std::thread server_thread([&]() {
-    auto ready = listener.value().wait_for_connection(1000);
+    const auto ready = listener.value().wait_for_connection(kNetworkTimeoutMs);
     ASSERT_TRUE(ready.ok()) << ready.status().message();
     ASSERT_TRUE(ready.value());
     auto accepted = listener.value().accept();
     ASSERT_TRUE(accepted.ok()) << accepted.status().message();
+    const auto readable = accepted.value()->wait_until_readable(kNetworkTimeoutMs);
+    ASSERT_TRUE(readable.ok()) << readable.status().message();
+    ASSERT_TRUE(readable.value());
     std::array<std::byte, 5> buffer{};
     const upr::ReadResult read_result = accepted.value()->read(buffer);
     ASSERT_TRUE(read_result.status.ok()) << read_result.status.message();
@@ -140,7 +145,7 @@ TEST(TcpStreamTransportTest, SupportsEndpointsMoveAssignmentAndListenerMetadata)
   std::thread client_thread([port]() {
     upr::TcpTransportOptions client_options;
     client_options.non_blocking = true;
-    auto client = upr::TcpStreamTransport::connect_to_host("localhost", port, client_options);
+    auto client = upr::TcpStreamTransport::connect_to_host("127.0.0.1", port, client_options);
     ASSERT_TRUE(client.ok()) << client.status().message();
     EXPECT_TRUE(client.value().is_open());
     EXPECT_NE(client.value().local_endpoint().find(':'), std::string::npos);
@@ -148,6 +153,9 @@ TEST(TcpStreamTransportTest, SupportsEndpointsMoveAssignmentAndListenerMetadata)
     EXPECT_EQ(client.value().capabilities(), upr::capability_mask(upr::TransportCapability::kStream));
   });
 
+  const auto ready = listener.value().wait_for_connection(kNetworkTimeoutMs);
+  ASSERT_TRUE(ready.ok()) << ready.status().message();
+  ASSERT_TRUE(ready.value());
   auto accepted = listener.value().accept();
   ASSERT_TRUE(accepted.ok()) << accepted.status().message();
   EXPECT_TRUE(accepted.value()->is_open());
@@ -187,11 +195,14 @@ TEST(TcpStreamTransportTest, ConstructorHandlesOwnershipAndInvalidDescriptors) {
     EXPECT_EQ(::close(raw_client), 0);
   });
 
-  auto ready = listener.value().wait_for_connection(1000);
+  const auto ready = listener.value().wait_for_connection(kNetworkTimeoutMs);
   ASSERT_TRUE(ready.ok()) << ready.status().message();
   ASSERT_TRUE(ready.value());
   auto accepted = listener.value().accept();
   ASSERT_TRUE(accepted.ok()) << accepted.status().message();
+  const auto readable = accepted.value()->wait_until_readable(kNetworkTimeoutMs);
+  ASSERT_TRUE(readable.ok()) << readable.status().message();
+  ASSERT_TRUE(readable.value());
   std::array<std::byte, 1> buffer{};
   upr::ReadResult read_result = accepted.value()->read(buffer);
   ASSERT_TRUE(read_result.status.ok()) << read_result.status.message();

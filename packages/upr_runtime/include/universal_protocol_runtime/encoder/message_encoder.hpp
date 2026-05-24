@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include "universal_protocol_runtime/compiler/compiled_protocol.hpp"
@@ -13,6 +14,17 @@
 #include "universal_protocol_runtime/encoder/encode_status.hpp"
 
 namespace universal_protocol_runtime {
+
+struct EncodePlan {
+  const CompiledProtocol* protocol = nullptr;
+  const CompiledMessage* layout = nullptr;
+
+  [[nodiscard]] bool valid() const noexcept { return protocol != nullptr && layout != nullptr; }
+};
+
+struct EncodedSegment {
+  ByteSpan bytes;
+};
 
 /**
  * @brief MessageBuilder is a zero-copy encoder for a single message instance. It enforces correct field ordering
@@ -92,6 +104,62 @@ class MessageBuilder {
   uint64_t checksum_field_mask_ = 0;
 };
 
+class SegmentedMessageBuilder {
+ public:
+  SegmentedMessageBuilder() = default;
+  SegmentedMessageBuilder(const CompiledProtocol& protocol,
+                          const CompiledMessage& layout,
+                          MutableByteSpan scratch_buffer);
+
+  ~SegmentedMessageBuilder() noexcept = default;
+
+  [[nodiscard]] bool valid() const noexcept { return layout_ != nullptr; }
+
+  EncodeStatus set_unsigned(FieldId id, uint64_t value);
+  EncodeStatus set_signed(FieldId id, int64_t value);
+  EncodeStatus set_float32(FieldId id, float value);
+  EncodeStatus set_float64(FieldId id, double value);
+  EncodeStatus set_bytes(FieldId id, ByteSpan bytes);
+  EncodeStatus set_string(FieldId id, std::string_view str);
+  EncodeStatus attach_bytes(FieldId id, ByteSpan bytes);
+  EncodeStatus attach_string(FieldId id, std::string_view str);
+  EncodeStatus finalize(std::size_t* bytes_written = nullptr);
+  EncodeStatus copy_to(MutableByteSpan output, std::size_t* bytes_written = nullptr) const;
+
+  [[nodiscard]] bool finalized() const noexcept { return finalized_; }
+  [[nodiscard]] std::span<const EncodedSegment> segments() const noexcept { return {segments_.data(), segment_count_}; }
+
+ private:
+  static constexpr size_t kMaxSegments = (kMaxFieldsPerMessage * 2U) + 1U;
+
+  EncodeStatus advance_to(FieldId target_id);
+  EncodeStatus append_owned_bytes(FieldId id, ByteSpan bytes);
+  EncodeStatus append_borrowed_bytes(FieldId id, ByteSpan bytes);
+  EncodeStatus append_filled_bytes(FieldId id, size_t size, std::byte fill_byte);
+  EncodeStatus append_scalar(FieldId id, uint64_t raw_value);
+  EncodeStatus emit_alignment_gap(FieldId next_id);
+
+  bool is_checksum_field(FieldId fid) const noexcept { return (checksum_field_mask_ >> fid) & 1U; }
+
+  const CompiledProtocol* protocol_ = nullptr;
+  const CompiledMessage* layout_ = nullptr;
+  MutableByteSpan scratch_buffer_;
+  std::array<EncodedSegment, kMaxSegments> segments_{};
+  std::array<std::size_t, kMaxSegments> segment_offsets_{};
+  std::array<std::size_t, kMaxSegments> segment_lengths_{};
+  std::array<std::size_t, kMaxFieldsPerMessage> field_starts_{};
+  std::array<std::size_t, kMaxFieldsPerMessage> field_ends_{};
+  std::array<std::size_t, kMaxFieldsPerMessage> field_segment_indices_{};
+  std::array<uint64_t, kMaxFieldsPerMessage> written_scalars_{};
+  std::size_t scratch_offset_ = 0;
+  std::size_t total_size_ = 0;
+  size_t segment_count_ = 0;
+  FieldId next_field_id_ = 0;
+  bool finalized_ = false;
+  bool failed_ = false;
+  uint64_t checksum_field_mask_ = 0;
+};
+
 /**
  * @brief ProtocolEncoder is a factory for MessageBuilders. It holds a reference to the compiled protocol and
  * looks up message definitions by name.
@@ -107,6 +175,11 @@ class ProtocolEncoder {
   // Create a MessageBuilder targeting `message_name` and writing into `buffer`.
   // Returns std::nullopt if the message is not found in the protocol.
   std::optional<MessageBuilder> build(std::string_view message_name, MutableByteSpan buffer) const;
+  std::optional<MessageBuilder> build(const EncodePlan& plan, MutableByteSpan buffer) const;
+  std::optional<SegmentedMessageBuilder> build_segmented(std::string_view message_name,
+                                                         MutableByteSpan scratch_buffer) const;
+  std::optional<SegmentedMessageBuilder> build_segmented(const EncodePlan& plan, MutableByteSpan scratch_buffer) const;
+  std::optional<EncodePlan> make_plan(std::string_view message_name) const;
 
   const CompiledMessage* find_message(std::string_view message_name) const;
 

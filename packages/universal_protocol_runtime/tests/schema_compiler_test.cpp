@@ -124,6 +124,60 @@ TEST(SchemaCompilerTest, ResolvesNamedEnumTypes) {
   EXPECT_EQ(order->fields()[0].enum_values[1].name, "Sell");
 }
 
+TEST(SchemaCompilerTest, CompilesCollectionsVariantsPresenceAndConditions) {
+  upr::FieldDefinition note_length = upr_test_support::make_scalar_field("note_len", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_presence(&note_length, "presence", 0);
+
+  upr::FieldDefinition note =
+      upr_test_support::make_dynamic_string_field("note", "note_len", upr::StringEncoding::kUtf8);
+  upr_test_support::set_presence(&note, "presence", 0);
+
+  upr::FieldDefinition revision = upr_test_support::make_scalar_field("revision", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_condition(&revision, "kind", 2);
+
+  upr::StatusOr<upr::CompiledProtocol> compiled = upr::compile_protocol(upr_test_support::make_protocol(
+      "market_data",
+      {upr_test_support::make_message(
+          "Snapshot",
+          {upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("presence", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("level_count", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_collection_field("levels", "Level", "level_count"),
+           upr_test_support::make_variant_field("detail",
+                                                "kind",
+                                                {{.tag_value = 1, .referenced_type = "QuoteDetail"},
+                                                 {.tag_value = 2, .referenced_type = "TradeDetail"}}),
+           note_length,
+           note,
+           revision})},
+      {upr_test_support::make_struct("Level",
+                                     {upr_test_support::make_scalar_field("price", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("qty", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct("QuoteDetail",
+                                     {upr_test_support::make_scalar_field("best_bid", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("best_ask", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct(
+           "TradeDetail", {upr_test_support::make_scalar_field("trade_id", upr::FieldKind::kUnsigned, 4)})}));
+
+  ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+  const upr::CompiledMessage* snapshot = compiled.value().find_message("Snapshot");
+  ASSERT_NE(snapshot, nullptr);
+  ASSERT_EQ(snapshot->fields().size(), 8U);
+  EXPECT_EQ(snapshot->fields()[3].kind, upr::FieldKind::kCollection);
+  EXPECT_TRUE(snapshot->fields()[3].dynamic_count);
+  EXPECT_EQ(snapshot->fields()[3].count_from_field, 2U);
+  EXPECT_EQ(snapshot->fields()[4].kind, upr::FieldKind::kVariant);
+  EXPECT_EQ(snapshot->fields()[4].tag_from_field, 0U);
+  ASSERT_EQ(snapshot->fields()[4].variant_cases.size(), 2U);
+  EXPECT_TRUE(snapshot->fields()[5].has_presence);
+  EXPECT_EQ(snapshot->fields()[5].presence_field, 1U);
+  EXPECT_EQ(snapshot->fields()[5].presence_bit, 0U);
+  EXPECT_TRUE(snapshot->fields()[7].has_condition);
+  EXPECT_EQ(snapshot->fields()[7].condition_field, 0U);
+  EXPECT_EQ(snapshot->fields()[7].condition_equals, 2U);
+  EXPECT_FALSE(snapshot->has_fixed_size());
+}
+
 TEST(SchemaCompilerTest, CompilesBigEndianDispatchPrefixesSignedBitfieldsAndChecksumAnchors) {
   upr::FieldDefinition kind = upr_test_support::make_scalar_field(
       "kind", upr::FieldKind::kUnsigned, 2, upr::ByteOrder::kBigEndian, true, 0xB234U);
@@ -172,6 +226,380 @@ TEST(SchemaCompilerTest, CompilesBigEndianDispatchPrefixesSignedBitfieldsAndChec
   EXPECT_EQ(message->checksums()[2].from.field_id, 2U);
   EXPECT_EQ(message->checksums()[2].to.kind, upr::ChecksumAnchorKind::kFieldEnd);
   EXPECT_EQ(message->checksums()[2].to.field_id, 5U);
+}
+
+TEST(SchemaCompilerTest, CompilesFixedCollectionsWithVariableElementsAndVariantsWithMixedCaseSizes) {
+  upr::StatusOr<upr::CompiledProtocol> compiled = upr::compile_protocol(upr_test_support::make_protocol(
+      "advanced_shapes",
+      {upr_test_support::make_message(
+          "Packet",
+          {upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_fixed_collection_field("items", "VariableItem", 2),
+           upr_test_support::make_variant_field("detail",
+                                                "kind",
+                                                {{.tag_value = 1, .referenced_type = "SmallDetail"},
+                                                 {.tag_value = 2, .referenced_type = "LargeDetail"}})})},
+      {upr_test_support::make_struct("VariableItem",
+                                     {upr_test_support::make_scalar_field("payload_len", upr::FieldKind::kUnsigned, 1),
+                                      upr_test_support::make_dynamic_bytes_field("payload", "payload_len")}),
+       upr_test_support::make_struct("SmallDetail",
+                                     {upr_test_support::make_scalar_field("code", upr::FieldKind::kUnsigned, 1)}),
+       upr_test_support::make_struct("LargeDetail",
+                                     {upr_test_support::make_scalar_field("code", upr::FieldKind::kUnsigned, 1),
+                                      upr_test_support::make_scalar_field("extra", upr::FieldKind::kUnsigned, 2)})}));
+
+  ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+  const upr::CompiledMessage* packet = compiled.value().find_message("Packet");
+  ASSERT_NE(packet, nullptr);
+  ASSERT_EQ(packet->fields().size(), 3U);
+  EXPECT_EQ(packet->fields()[1].kind, upr::FieldKind::kCollection);
+  EXPECT_EQ(packet->fields()[1].fixed_count, 2U);
+  EXPECT_EQ(packet->fields()[1].fixed_size, 2U);
+  EXPECT_EQ(packet->fields()[2].kind, upr::FieldKind::kVariant);
+  EXPECT_EQ(packet->fields()[2].fixed_size, 1U);
+  EXPECT_FALSE(packet->has_fixed_size());
+}
+
+TEST(SchemaCompilerTest, RejectsInvalidAdvancedFieldShapes) {
+  struct Case {
+    upr::ProtocolDefinition definition;
+    const char* expected_message_substring;
+    upr::StatusCode expected_code = upr::StatusCode::kInvalidArgument;
+  };
+
+  std::vector<Case> cases;
+
+  {
+    upr::FieldDefinition field;
+    field.name = "items";
+    field.kind = upr::FieldKind::kCollection;
+    field.fixed_count = 2;
+    cases.push_back({
+        .definition = upr_test_support::make_protocol("invalid_collection_reference",
+                                                      {upr_test_support::make_message("Packet", {field})}),
+        .expected_message_substring = "must reference a struct type",
+    });
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_fixed_collection_field("items", "Item", 2);
+    field.count_from_field = "item_count";
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "invalid_collection_count_mode",
+            {upr_test_support::make_message(
+                "Packet", {upr_test_support::make_scalar_field("item_count", upr::FieldKind::kUnsigned, 1), field})},
+            {upr_test_support::make_struct(
+                "Item", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}),
+        .expected_message_substring = "must declare exactly one of a fixed count or 'count_from'",
+    });
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_collection_field("items", "Item", "quantity");
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "invalid_collection_count_source",
+            {upr_test_support::make_message(
+                "Packet", {upr_test_support::make_scalar_field("quantity", upr::FieldKind::kSigned, 1), field})},
+            {upr_test_support::make_struct(
+                "Item", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}),
+        .expected_message_substring = "must use an unsigned or enum field as its count source",
+    });
+  }
+
+  {
+    upr::FieldDefinition field =
+        upr_test_support::make_variant_field("detail", "kind", {{.tag_value = 1, .referenced_type = "MissingDetail"}});
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "invalid_variant_case_struct",
+            {upr_test_support::make_message(
+                "Packet", {upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1), field})}),
+        .expected_message_substring = "Unknown struct type: MissingDetail",
+        .expected_code = upr::StatusCode::kNotFound,
+    });
+  }
+
+  {
+    upr::FieldDefinition field =
+        upr_test_support::make_variant_field("detail", "kind", {{.tag_value = 1, .referenced_type = "Detail"}});
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "invalid_variant_tag_type",
+            {upr_test_support::make_message(
+                "Packet", {upr_test_support::make_scalar_field("kind", upr::FieldKind::kSigned, 1), field})},
+            {upr_test_support::make_struct(
+                "Detail", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}),
+        .expected_message_substring = "must use an unsigned or enum tag field",
+    });
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_variant_field("detail", "", {});
+    cases.push_back({
+        .definition = upr_test_support::make_protocol("invalid_variant_missing_cases",
+                                                      {upr_test_support::make_message("Packet", {field})}),
+        .expected_message_substring = "requires 'tag_from' and at least one case",
+    });
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_scalar_field("revision", upr::FieldKind::kUnsigned, 1);
+    upr_test_support::set_condition(&field, "missing_kind", 1);
+    cases.push_back({
+        .definition = upr_test_support::make_protocol("invalid_condition_dependency",
+                                                      {upr_test_support::make_message("Packet", {field})}),
+        .expected_message_substring = "must reference a prior condition field",
+    });
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_scalar_field("note", upr::FieldKind::kUnsigned, 1);
+    upr_test_support::set_presence(&field, "flags", 9);
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "invalid_presence_bit",
+            {upr_test_support::make_message(
+                "Packet", {upr_test_support::make_scalar_field("flags", upr::FieldKind::kUnsigned, 1), field})}),
+        .expected_message_substring = "exceeds the width of field 'flags'",
+    });
+  }
+
+  for (const Case& test_case : cases) {
+    const auto compiled = upr::compile_protocol(test_case.definition);
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_EQ(compiled.status().code(), test_case.expected_code);
+    EXPECT_NE(std::string(compiled.status().message()).find(test_case.expected_message_substring), std::string::npos);
+  }
+}
+
+TEST(SchemaCompilerTest, RejectsEnumValidationAndModifierMisuse) {
+  {
+    upr::ProtocolDefinition protocol;
+    protocol.name = "bad_enum";
+    protocol.messages.push_back(upr_test_support::make_message(
+        "Packet", {upr_test_support::make_scalar_field("id", upr::FieldKind::kUnsigned, 1)}));
+    protocol.enums.push_back(
+        upr::EnumDefinition{.name = "", .width_bytes = 1, .values = {{.value = 1, .name = "One"}}});
+    const auto compiled = upr::compile_protocol(protocol);
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Enum name must not be empty"), std::string::npos);
+  }
+
+  {
+    upr::ProtocolDefinition protocol = upr_test_support::make_protocol(
+        "dup_enum",
+        {upr_test_support::make_message("Packet",
+                                        {upr_test_support::make_scalar_field("id", upr::FieldKind::kUnsigned, 1)})});
+    protocol.enums.push_back(
+        upr::EnumDefinition{.name = "Shared", .width_bytes = 1, .values = {{.value = 1, .name = "One"}}});
+    protocol.structs.push_back(upr_test_support::make_struct(
+        "Shared", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)}));
+    const auto compiled = upr::compile_protocol(protocol);
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Duplicate layout name"), std::string::npos);
+  }
+
+  {
+    upr::ProtocolDefinition protocol = upr_test_support::make_protocol(
+        "bad_enum_width",
+        {upr_test_support::make_message("Packet",
+                                        {upr_test_support::make_scalar_field("id", upr::FieldKind::kUnsigned, 1)})});
+    protocol.enums.push_back(
+        upr::EnumDefinition{.name = "Wide", .width_bytes = 3, .values = {{.value = 1, .name = "One"}}});
+    const auto compiled = upr::compile_protocol(protocol);
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("unsupported underlying width"), std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition payload = upr_test_support::make_dynamic_bytes_field("payload", "length");
+    payload.count_from_field = "length";
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "byte_count_modifier",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("length", upr::FieldKind::kUnsigned, 1), payload})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("use 'size'/'size_from', not collection counts"),
+              std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition label = upr_test_support::make_string_field("label", 4);
+    label.variant_cases = {{.tag_value = 1, .referenced_type = "Detail"}};
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "string_variant_modifier", {upr_test_support::make_message("Packet", {label})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("do not support variant declarations"), std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition nested = upr_test_support::make_struct_field("nested", "Body");
+    nested.fixed_count = 2;
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "struct_count_modifier",
+        {upr_test_support::make_message("Packet", {nested})},
+        {upr_test_support::make_struct("Body",
+                                       {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Struct fields do not support collection counts"),
+              std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition field = upr_test_support::make_reserved_field("pad", 2, 0x00);
+    upr_test_support::set_alignment(&field, 3);
+    const auto compiled = upr::compile_protocol(
+        upr_test_support::make_protocol("bad_alignment", {upr_test_support::make_message("Packet", {field})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("must use a power-of-two alignment"), std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition payload = upr_test_support::make_reserved_field("payload", 2, 0x00);
+    upr_test_support::set_condition(&payload, "length", 1);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "reserved_with_condition",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("length", upr::FieldKind::kUnsigned, 1), payload})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message())
+                  .find("Reserved fields cannot use checksum, conditional, or presence modifiers"),
+              std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition pad = upr_test_support::make_reserved_field("pad", 2, 0xFF);
+    upr_test_support::set_presence(&pad, "flags", 0);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "reserved_presence_modifier",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("flags", upr::FieldKind::kUnsigned, 1), pad})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message())
+                  .find("Reserved fields cannot use checksum, conditional, or presence modifiers"),
+              std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition detail =
+        upr_test_support::make_variant_field("detail", "kind", {{.tag_value = 1, .referenced_type = "Body"}});
+    detail.fixed_size = 4;
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "variant_unrelated_modifier",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1), detail})},
+        {upr_test_support::make_struct("Body",
+                                       {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("cannot use unrelated field modifiers"), std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition count = upr_test_support::make_scalar_field("count", upr::FieldKind::kUnsigned, 1);
+    upr::FieldDefinition items = upr_test_support::make_collection_field("items", "Missing", "count");
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "missing_collection_struct", {upr_test_support::make_message("Packet", {count, items})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_EQ(compiled.status().code(), upr::StatusCode::kNotFound);
+    EXPECT_NE(std::string(compiled.status().message()).find("Unknown struct type: Missing"), std::string::npos);
+  }
+
+  {
+    upr::FieldDefinition note = upr_test_support::make_scalar_field("note", upr::FieldKind::kSigned, 1);
+    upr_test_support::set_presence(&note, "flags", 0);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "presence_wrong_dependency_type",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("flags", upr::FieldKind::kSigned, 1), note})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("must depend on an unsigned or enum field"),
+              std::string::npos);
+  }
+}
+
+TEST(SchemaCompilerTest, RejectsValidationCompilationFailures) {
+  {
+    auto rule = upr_test_support::make_validation_against_value("missing", upr::ValidationOperator::kEq, 1);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "missing_validation_field",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)}, {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("references unknown field 'missing'"), std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_value("value", upr::ValidationOperator::kEq, 1);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "signed_validation_field",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("value", upr::FieldKind::kSigned, 1)}, {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("must be unsigned or enum typed"), std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_value("value", upr::ValidationOperator::kEq, 1);
+    rule.multiplier = 0;
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "zero_multiplier",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)}, {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Validation multiplier must be non-zero"),
+              std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_field("left", upr::ValidationOperator::kLe, "missing");
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "missing_right_field",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("left", upr::FieldKind::kUnsigned, 1)}, {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("references unknown field 'missing'"), std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_field("left", upr::ValidationOperator::kLe, "right");
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "signed_right_field",
+        {upr_test_support::make_message("Packet",
+                                        {upr_test_support::make_scalar_field("left", upr::FieldKind::kUnsigned, 1),
+                                         upr_test_support::make_scalar_field("right", upr::FieldKind::kSigned, 1)},
+                                        {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Validation comparison field 'right'"), std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_value("left", upr::ValidationOperator::kGe, 1);
+    upr_test_support::set_validation_condition(&rule, "missing", 2);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "missing_when_field",
+        {upr_test_support::make_message(
+            "Packet", {upr_test_support::make_scalar_field("left", upr::FieldKind::kUnsigned, 1)}, {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message())
+                  .find("Validation condition in message 'Packet' references unknown field 'missing'"),
+              std::string::npos);
+  }
+
+  {
+    auto rule = upr_test_support::make_validation_against_value("left", upr::ValidationOperator::kGe, 1);
+    upr_test_support::set_validation_condition(&rule, "when_field", 2);
+    const auto compiled = upr::compile_protocol(upr_test_support::make_protocol(
+        "signed_when_field",
+        {upr_test_support::make_message("Packet",
+                                        {upr_test_support::make_scalar_field("left", upr::FieldKind::kUnsigned, 1),
+                                         upr_test_support::make_scalar_field("when_field", upr::FieldKind::kSigned, 1)},
+                                        {rule})}));
+    ASSERT_FALSE(compiled.ok());
+    EXPECT_NE(std::string(compiled.status().message()).find("Validation condition field 'when_field'"),
+              std::string::npos);
+  }
 }
 
 TEST(SchemaCompilerTest, FingerprintChangesWhenDefinitionChanges) {
@@ -675,5 +1103,40 @@ INSTANTIATE_TEST_SUITE_P(
                             upr::StatusCode::kInvalidArgument,
                             "Unsupported checksum anchor"}),
     [](const ::testing::TestParamInfo<InvalidCompilerCase>& info) { return info.param.name; });
+
+TEST(SchemaCompilerTest, CompilesReservedAlignedFieldsAndValidations) {
+  const auto protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "hardware",
+      {upr_test_support::make_message(
+          "Packet",
+          {
+              upr_test_support::make_scalar_field("version", upr::FieldKind::kUnsigned, 1),
+              [] {
+                auto field = upr_test_support::make_reserved_field("pad", 3, 0xAA);
+                upr_test_support::set_alignment(&field, 4);
+                return field;
+              }(),
+              upr_test_support::make_scalar_field("payload_len", upr::FieldKind::kUnsigned, 1),
+              upr_test_support::make_scalar_field("item_count", upr::FieldKind::kUnsigned, 1),
+          },
+          {[] {
+            auto rule = upr_test_support::make_validation_against_field(
+                "payload_len", upr::ValidationOperator::kEq, "item_count", 4);
+            upr_test_support::set_validation_condition(&rule, "version", 2);
+            return rule;
+          }()})}));
+
+  const upr::CompiledMessage* message = protocol.find_message("Packet");
+  ASSERT_NE(message, nullptr);
+  ASSERT_EQ(message->fields().size(), 4U);
+  EXPECT_EQ(message->fields()[1].alignment, 4U);
+  EXPECT_TRUE(message->fields()[1].is_reserved);
+  EXPECT_EQ(message->fields()[1].reserved_fill_byte, 0xAAU);
+  ASSERT_EQ(message->validations().size(), 1U);
+  EXPECT_EQ(message->validations()[0].field_id, 2U);
+  EXPECT_TRUE(message->validations()[0].compare_to_field);
+  EXPECT_EQ(message->validations()[0].other_field_id, 3U);
+  EXPECT_EQ(message->minimum_size(), 9U);
+}
 
 }  // namespace
