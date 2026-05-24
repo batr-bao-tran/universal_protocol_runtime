@@ -14,6 +14,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief High-level outcomes returned by one stream runtime poll cycle.
+ */
 enum class PollStatus {
   kMessageReady,
   kNeedMoreData,
@@ -24,12 +27,20 @@ enum class PollStatus {
   kTransportError,
 };
 
+/**
+ * @brief Policy applied when a frame cannot be decoded successfully.
+ */
 enum class DecodeFailurePolicy {
   kStop,
   kDropAndContinue,
   kQuarantine,
 };
 
+/**
+ * @brief Converts a poll status to a stable string name.
+ * @param status Status value to stringify.
+ * @return String representation of the poll status.
+ */
 constexpr std::string_view to_string(PollStatus status) noexcept {
   switch (status) {
     case PollStatus::kMessageReady:
@@ -50,6 +61,11 @@ constexpr std::string_view to_string(PollStatus status) noexcept {
   return "unknown";
 }
 
+/**
+ * @brief Converts a decode failure policy to a stable string name.
+ * @param policy Policy value to stringify.
+ * @return String representation of the policy.
+ */
 constexpr std::string_view to_string(DecodeFailurePolicy policy) noexcept {
   switch (policy) {
     case DecodeFailurePolicy::kStop:
@@ -62,6 +78,9 @@ constexpr std::string_view to_string(DecodeFailurePolicy policy) noexcept {
   return "unknown";
 }
 
+/**
+ * @brief Configures failure handling for streamed frame decode.
+ */
 struct StreamRuntimeOptions {
   DecodeFailurePolicy message_not_found_policy = DecodeFailurePolicy::kDropAndContinue;
   DecodeFailurePolicy schema_mismatch_policy = DecodeFailurePolicy::kQuarantine;
@@ -70,15 +89,25 @@ struct StreamRuntimeOptions {
   DecodeFailurePolicy field_limit_policy = DecodeFailurePolicy::kStop;
 };
 
+/**
+ * @brief Result returned from one call to `StreamRuntime::poll`.
+ */
 struct PollResult {
   PollStatus status = PollStatus::kNeedMoreData;
   DecodeStatus decode_status = DecodeStatus::kOk;
   DecodeFailurePolicy policy = DecodeFailurePolicy::kStop;
   size_t bytes_consumed = 0;
 
+  /**
+   * @brief Reports whether a decoded message is available.
+   * @return `true` when `poll` produced a message.
+   */
   constexpr bool message_ready() const noexcept { return status == PollStatus::kMessageReady; }
 };
 
+/**
+ * @brief Counters describing stream runtime activity.
+ */
 struct RuntimeStats {
   size_t bytes_read = 0;
   size_t transport_reads = 0;
@@ -89,19 +118,44 @@ struct RuntimeStats {
 };
 
 template <size_t Capacity>
+/**
+ * @brief Couples transport, framing, and decode into a single polling loop.
+ * @tparam Capacity Internal byte ring buffer capacity in bytes.
+ */
 class StreamRuntime {
  public:
+  /**
+   * @brief Constructs a stream runtime with default failure policies.
+   * @param transport Transport that supplies framed bytes.
+   * @param framer Framer used to extract message boundaries.
+   * @param decoder Decoder used to parse framed messages.
+   */
   StreamRuntime(ITransport& transport, const IFramer& framer, const ProtocolDecoder& decoder)
       : StreamRuntime(transport, framer, decoder, {}) {}
 
+  /**
+   * @brief Constructs a stream runtime with explicit failure policies.
+   * @param transport Transport that supplies framed bytes.
+   * @param framer Framer used to extract message boundaries.
+   * @param decoder Decoder used to parse framed messages.
+   * @param options Failure-handling options.
+   */
   StreamRuntime(ITransport& transport,
                 const IFramer& framer,
                 const ProtocolDecoder& decoder,
                 StreamRuntimeOptions options)
       : transport_(&transport), framer_(&framer), decoder_(&decoder), options_(options) {}
 
+  /**
+   * @brief Destroys the stream runtime.
+   * @return No return value.
+   */
   ~StreamRuntime() noexcept = default;
 
+  /**
+   * @brief Returns cumulative runtime statistics.
+   * @return Reference to the statistics snapshot.
+   */
   const RuntimeStats& stats() const { return stats_; }
 
   // Greedy polling entry point for a single-threaded runtime.
@@ -109,6 +163,11 @@ class StreamRuntime {
   // decoded message, a blocking boundary, end-of-stream, or an error.
   // When used with non-blocking transports, call this after a readiness signal
   // or backoff policy rather than spinning on repeated kNeedMoreData results.
+  /**
+   * @brief Polls transport, framing, and decode until a boundary condition is reached.
+   * @param message Output decoded message when one is available.
+   * @return Poll result describing the outcome of this cycle.
+   */
   PollResult poll(DecodedMessage* message) {
     while (true) {
       ByteSpan frame;

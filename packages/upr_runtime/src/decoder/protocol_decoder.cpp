@@ -7,7 +7,7 @@
 namespace universal_protocol_runtime {
 namespace {
 
-bool frame_matches_dispatch_prefix(const CompiledMessage& compiled_message, ByteSpan frame) {
+inline bool frame_matches_dispatch_prefix(const CompiledMessage& compiled_message, ByteSpan frame) noexcept {
   const std::span<const std::byte> dispatch_prefix = compiled_message.dispatch_prefix();
   if (UPR_LIKELY(dispatch_prefix.empty())) {
     return true;
@@ -63,16 +63,71 @@ DecodeStatus ProtocolDecoder::decode_as(std::string_view message_name, ByteSpan 
   return decode_message(*compiled_message, frame, message);
 }
 
+DecodeStatus ProtocolDecoder::decode_as(std::string_view message_name,
+                                        ByteSpan frame,
+                                        DecodedMessage* message,
+                                        const DecodeFieldMask& field_mask) const {
+  const CompiledMessage* compiled_message = protocol_->find_message(message_name);
+  if (compiled_message == nullptr) {
+    return DecodeStatus::kMessageNotFound;
+  }
+  return decode_message(*compiled_message, frame, message, field_mask.selects_all() ? nullptr : &field_mask);
+}
+
 DecodeStatus ProtocolDecoder::decode_as(const CompiledMessage& compiled_message,
                                         ByteSpan frame,
                                         DecodedMessage* message) const {
   return decode_message(compiled_message, frame, message);
 }
 
+DecodeStatus ProtocolDecoder::decode_as(const CompiledMessage& compiled_message,
+                                        ByteSpan frame,
+                                        DecodedMessage* message,
+                                        const DecodeFieldMask& field_mask) const {
+  return decode_message(compiled_message, frame, message, field_mask.selects_all() ? nullptr : &field_mask);
+}
+
+DecodeStatus ProtocolDecoder::decode_with_plan(const DecodePlan& plan, ByteSpan frame, DecodedMessage* message) const {
+  if (!plan.valid() || plan.protocol != protocol_) {
+    return DecodeStatus::kMessageNotFound;
+  }
+  return decode_message(*plan.layout,
+                        frame,
+                        message,
+                        (plan.has_field_mask && !plan.field_mask.selects_all()) ? &plan.field_mask : nullptr);
+}
+
+std::optional<DecodePlan> ProtocolDecoder::make_plan(std::string_view message_name) const {
+  const CompiledMessage* compiled_message = protocol_->find_message(message_name);
+  if (compiled_message == nullptr) {
+    return std::nullopt;
+  }
+  return DecodePlan{.protocol = protocol_, .layout = compiled_message};
+}
+
+std::optional<DecodePlan> ProtocolDecoder::make_plan(std::string_view message_name,
+                                                     const DecodeFieldMask& field_mask) const {
+  const CompiledMessage* compiled_message = protocol_->find_message(message_name);
+  if (compiled_message == nullptr) {
+    return std::nullopt;
+  }
+  if (field_mask.selects_all()) {
+    return DecodePlan{.protocol = protocol_, .layout = compiled_message};
+  }
+  return DecodePlan{
+      .protocol = protocol_,
+      .layout = compiled_message,
+      .field_mask = field_mask,
+      .has_field_mask = true,
+  };
+}
+
 DecodeStatus ProtocolDecoder::decode_message(const CompiledMessage& compiled_message,
                                              ByteSpan frame,
-                                             DecodedMessage* message) const {
-  return message->assign_from_layout(*protocol_, compiled_message, frame, nullptr);
+                                             DecodedMessage* message,
+                                             const DecodeFieldMask* field_mask) const {
+  return message->assign_from_layout(
+      *protocol_, compiled_message, frame, nullptr, field_mask == nullptr ? nullptr : &field_mask->selected_fields);
 }
 
 }  // namespace universal_protocol_runtime

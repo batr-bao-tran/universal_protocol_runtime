@@ -4,6 +4,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Result codes returned by runtime decode operations.
+ */
 enum class DecodeStatus {
   kOk,
   kMessageNotFound,
@@ -13,6 +16,11 @@ enum class DecodeStatus {
   kFieldLimitExceeded,
 };
 
+/**
+ * @brief Converts a decode status to a stable string name.
+ * @param status Status value to stringify.
+ * @return String representation of the status.
+ */
 constexpr std::string_view to_string(DecodeStatus status) noexcept {
   switch (status) {
     case DecodeStatus::kOk:

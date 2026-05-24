@@ -9,6 +9,10 @@ namespace universal_protocol_runtime {
 #pragma clang coverage off
 #endif
 // LCOV_EXCL_START
+/**
+ * @brief Marks control flow as unreachable for optimizers and sanitizers.
+ * @return No return value.
+ */
 [[noreturn, clang::no_sanitize("coverage")]] inline void unreachable() noexcept {  // LCOV_EXCL_LINE
 #if defined(_MSC_VER)
   __assume(false);  // LCOV_EXCL_LINE

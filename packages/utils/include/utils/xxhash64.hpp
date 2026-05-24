@@ -11,15 +11,32 @@
 
 namespace universal_protocol_runtime {
 
+// Default seed used by the local XXH64 implementation.
 inline constexpr uint64_t kXxHash64Seed = 0ULL;
 
+/**
+ * @brief Incremental XXH64 state for hashing schema metadata and payload bytes.
+ */
 class XxHash64State {
  public:
+  /**
+   * @brief Constructs an incremental XXH64 state.
+   * @param seed Seed value mixed into the hash state.
+   */
   explicit constexpr XxHash64State(uint64_t seed = kXxHash64Seed) noexcept
       : seed_(seed), v1_(seed + kPrime1 + kPrime2), v2_(seed + kPrime2), v3_(seed), v4_(seed - kPrime1) {}
 
+  /**
+   * @brief Destroys the hash state.
+   * @return No return value.
+   */
   ~XxHash64State() noexcept = default;
 
+  /**
+   * @brief Incorporates raw bytes into the running hash.
+   * @param bytes Bytes to hash.
+   * @return No return value.
+   */
   void update(std::span<const std::byte> bytes) noexcept {
     if (bytes.empty()) {
       return;
@@ -56,8 +73,19 @@ class XxHash64State {
     }
   }
 
+  /**
+   * @brief Incorporates a string view into the running hash.
+   * @param value String bytes to hash.
+   * @return No return value.
+   */
   void update(std::string_view value) noexcept { update(std::as_bytes(std::span(value.data(), value.size()))); }
 
+  /**
+   * @brief Incorporates an integral or enum value into the running hash.
+   * @tparam T Integral or enum type.
+   * @param value Value to hash.
+   * @return No return value.
+   */
   template <typename T>
   void update_integral(T value) noexcept {
     static_assert(std::is_integral_v<T> || std::is_enum_v<T>);
@@ -77,11 +105,20 @@ class XxHash64State {
     update(bytes);
   }
 
+  /**
+   * @brief Incorporates a boolean value into the running hash.
+   * @param value Value to hash.
+   * @return No return value.
+   */
   void update_bool(bool value) noexcept {
     const uint8_t normalized = value ? 1U : 0U;
     update(std::as_bytes(std::span(&normalized, kBoolBytes)));
   }
 
+  /**
+   * @brief Finalizes the running hash state.
+   * @return 64-bit hash digest.
+   */
   uint64_t digest() const noexcept {
     uint64_t hash = 0;
     if (total_length_ >= kStripeBytes) {
@@ -204,18 +241,37 @@ class XxHash64State {
   size_t buffer_size_ = 0;
 };
 
+/**
+ * @brief Hashes a byte span with XXH64.
+ * @param bytes Bytes to hash.
+ * @param seed Seed value mixed into the hash state.
+ * @return 64-bit hash digest.
+ */
 inline uint64_t xxhash64(std::span<const std::byte> bytes, uint64_t seed = kXxHash64Seed) noexcept {
   XxHash64State hasher(seed);
   hasher.update(bytes);
   return hasher.digest();
 }
 
+/**
+ * @brief Hashes a string view with XXH64.
+ * @param value String bytes to hash.
+ * @param seed Seed value mixed into the hash state.
+ * @return 64-bit hash digest.
+ */
 inline uint64_t xxhash64(std::string_view value, uint64_t seed = kXxHash64Seed) noexcept {
   XxHash64State hasher(seed);
   hasher.update(value);
   return hasher.digest();
 }
 
+/**
+ * @brief Hashes an integral or enum value with XXH64.
+ * @tparam T Integral or enum type.
+ * @param value Value to hash.
+ * @param seed Seed value mixed into the hash state.
+ * @return 64-bit hash digest.
+ */
 template <typename T>
 inline uint64_t xxhash64_integral(T value, uint64_t seed = kXxHash64Seed) noexcept {
   XxHash64State hasher(seed);
@@ -223,6 +279,12 @@ inline uint64_t xxhash64_integral(T value, uint64_t seed = kXxHash64Seed) noexce
   return hasher.digest();
 }
 
+/**
+ * @brief Hashes a boolean value with XXH64.
+ * @param value Value to hash.
+ * @param seed Seed value mixed into the hash state.
+ * @return 64-bit hash digest.
+ */
 inline uint64_t xxhash64_bool(bool value, uint64_t seed = kXxHash64Seed) noexcept {
   XxHash64State hasher(seed);
   hasher.update_bool(value);

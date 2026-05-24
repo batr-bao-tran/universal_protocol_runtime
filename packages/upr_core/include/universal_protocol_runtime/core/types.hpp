@@ -7,16 +7,25 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Byte order for fixed-width scalar fields.
+ */
 enum class ByteOrder {
   kLittleEndian,
   kBigEndian,
 };
 
+/**
+ * @brief Text encoding for schema string fields.
+ */
 enum class StringEncoding {
   kAscii,
   kUtf8,
 };
 
+/**
+ * @brief Logical field categories supported by the schema model.
+ */
 enum class FieldKind {
   kUnsigned,
   kSigned,
@@ -26,11 +35,22 @@ enum class FieldKind {
   kString,
   kStruct,
   kEnum,
+  kCollection,
+  kVariant,
 };
 
+/**
+ * @brief Stable numeric identifier for a compiled field.
+ */
 using FieldId = uint16_t;
+/**
+ * @brief Stable numeric identifier for a compiled bit field.
+ */
 using BitFieldId = uint16_t;
 
+/**
+ * @brief Named numeric value for schema enums and enum-backed bit fields.
+ */
 struct EnumValueDefinition {
   uint64_t value = 0;
   std::string name;
@@ -40,6 +60,11 @@ inline constexpr size_t kBitsPerByte = 8U;
 inline constexpr size_t kMaxFieldsPerMessage = 64;
 inline constexpr size_t kMaxBitFieldsPerMessage = 64;
 
+/**
+ * @brief Converts a byte-order enum to a stable string name.
+ * @param byte_order Byte order to stringify.
+ * @return String representation of the byte order.
+ */
 constexpr std::string_view to_string(ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -50,6 +75,11 @@ constexpr std::string_view to_string(ByteOrder byte_order) noexcept {
   return "unknown";
 }
 
+/**
+ * @brief Converts a field kind to a stable string name.
+ * @param kind Field kind to stringify.
+ * @return String representation of the field kind.
+ */
 constexpr std::string_view to_string(FieldKind kind) noexcept {
   switch (kind) {
     case FieldKind::kUnsigned:
@@ -68,10 +98,19 @@ constexpr std::string_view to_string(FieldKind kind) noexcept {
       return "struct";
     case FieldKind::kEnum:
       return "enum";
+    case FieldKind::kCollection:
+      return "collection";
+    case FieldKind::kVariant:
+      return "variant";
   }
   return "unknown";
 }
 
+/**
+ * @brief Converts a string encoding to a stable string name.
+ * @param encoding Encoding to stringify.
+ * @return String representation of the encoding.
+ */
 constexpr std::string_view to_string(StringEncoding encoding) noexcept {
   switch (encoding) {
     case StringEncoding::kAscii:

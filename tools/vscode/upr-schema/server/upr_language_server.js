@@ -26,17 +26,21 @@ const builtinTypes = new Set([
   "int8", "int16", "int32", "int64",
   "int8_be", "int16_be", "int32_be", "int64_be",
   "float32", "float64", "float32_be", "float64_be",
-  "bytes", "string", "ascii", "utf8", "enum",
+  "bytes", "string", "ascii", "utf8", "enum", "variant", "reserved",
 ]);
 
 const checksumAlgorithms = ["xor8", "sum16", "crc16_ccitt", "crc32", "crc32c"];
 const builtinChecksumAnchors = ["frame_start", "frame_end", "before_self", "after_self"];
+const comparisonOperators = new Set(["==", "!=", "<", "<=", ">", ">="]);
 const topLevelKeywords = ["protocol", "import", "enum", "struct", "message"];
+const layoutKeywords = ["allow_trailing_bytes", "validate"];
 const scalarTypeCompletions = [
   "uint8", "uint16", "uint32", "uint64",
+  "uint8_be", "uint16_be", "uint32_be", "uint64_be",
   "int8", "int16", "int32", "int64",
-  "float32", "float64",
-  "bytes", "string", "ascii", "utf8", "enum<uint8>",
+  "int8_be", "int16_be", "int32_be", "int64_be",
+  "float32", "float64", "float32_be", "float64_be",
+  "bytes", "string", "ascii", "utf8", "enum<uint8>", "variant(tag_field)", "reserved[4]",
 ];
 
 class Transport {
@@ -121,6 +125,13 @@ function positionInRange(position, range) {
   return comparePosition(position, range.start) >= 0 && comparePosition(position, range.end) <= 0;
 }
 
+function parseIntegerLiteral(text) {
+  if (typeof text !== "string" || text.length === 0) {
+    return Number.NaN;
+  }
+  return text.startsWith("0x") || text.startsWith("0X") ? Number.parseInt(text, 16) : Number.parseInt(text, 10);
+}
+
 class Lexer {
   constructor(text) {
     this.text = text;
@@ -150,8 +161,12 @@ class Lexer {
         tokens.push(this.readString());
         continue;
       }
-      if ("{}[]():,@=<>".includes(ch)) {
-        tokens.push(this.readPunctuation());
+      if (this.startsWith("==") || this.startsWith("!=") || this.startsWith("<=") || this.startsWith(">=")) {
+        tokens.push(this.readOperator(2));
+        continue;
+      }
+      if ("{}[]():,@=<>*".includes(ch)) {
+        tokens.push(this.readOperator(1));
         continue;
       }
       throw this.error("Unexpected character.");
@@ -231,9 +246,12 @@ class Lexer {
     throw this.error("Unterminated string literal.");
   }
 
-  readPunctuation() {
+  readOperator(width) {
     const start = this.currentPoint();
-    const value = this.advance();
+    let value = "";
+    for (let index = 0; index < width; ++index) {
+      value += this.advance();
+    }
     return this.makeToken("punctuation", value, start, this.currentPoint());
   }
 
@@ -251,6 +269,10 @@ class Lexer {
 
   peek(lookahead = 0) {
     return this.text[this.index + lookahead] || "";
+  }
+
+  startsWith(text) {
+    return this.text.slice(this.index, this.index + text.length) === text;
   }
 
   advance() {
@@ -315,10 +337,10 @@ class Parser {
         continue;
       }
       if (this.matchIdentifier("import")) {
-        const path = this.expectName("Expected import path.");
+        const importPath = this.expectName("Expected import path.");
         document.imports.push({
-          path: path.value,
-          pathRange: path.range,
+          path: importPath.value,
+          pathRange: importPath.range,
         });
         continue;
       }
@@ -362,7 +384,9 @@ class Parser {
       name: name.value,
       nameRange: name.range,
       fields: [],
+      validations: [],
       fieldMap: new Map(),
+      allowTrailingBytes: false,
     };
     if (kind === "message" && this.matchIdentifier("allow_trailing_bytes")) {
       layout.allowTrailingBytes = true;
@@ -374,8 +398,14 @@ class Parser {
         this.matchPunctuation(",");
         continue;
       }
+      if (this.matchIdentifier("validate")) {
+        layout.validations.push(this.parseValidation(layout));
+        this.matchPunctuation(",");
+        continue;
+      }
       const field = this.parseField(layout);
       layout.fields.push(field);
+      layout.fieldMap.set(field.name, field);
       this.matchPunctuation(",");
     }
     return layout;
@@ -394,21 +424,43 @@ class Parser {
       inlineEnum: null,
       sizeRef: null,
       sizeRefRange: null,
+      fixedSize: null,
+      countRef: null,
+      countRefRange: null,
+      fixedCount: null,
+      referencedType: null,
       checksum: null,
       bitfieldsRange: null,
+      condition: null,
+      presence: null,
+      alignment: null,
+      variantTag: null,
+      variantTagRange: null,
+      variantCases: [],
+      expectedValue: null,
+      expectedValueRange: null,
       layout,
     };
 
-    if (["bytes", "string", "ascii", "utf8"].includes(typeToken.value) && this.matchPunctuation("[")) {
-      const sizeToken = this.expectToken(
-          (token) => token.kind === "number" || token.kind === "identifier" || token.kind === "string",
-          "Expected field size or field reference.",
-      );
-      if (sizeToken.kind !== "number") {
-        field.sizeRef = sizeToken.value;
-        field.sizeRefRange = sizeToken.range;
-      }
-      this.expectPunctuation("]", "Expected ']' after field size.");
+    if (typeToken.value === "variant") {
+      field.typeKind = "variant";
+      this.expectPunctuation("(", "Expected '(' after variant.");
+      const tagField = this.expectIdentifier("Expected variant tag field.");
+      field.variantTag = tagField.value;
+      field.variantTagRange = tagField.range;
+      this.expectPunctuation(")", "Expected ')' after variant tag field.");
+      this.expectPunctuation("{", "Expected '{' after variant tag field.");
+      field.variantCases = this.parseVariantCases();
+      return field;
+    }
+
+    if (typeToken.value === "reserved") {
+      field.typeKind = "reserved";
+      this.expectPunctuation("[", "Expected '[' after reserved.");
+      const sizeToken = this.expectToken((token) => token.kind === "number", "Expected reserved field size.");
+      field.fixedSize = parseIntegerLiteral(sizeToken.value);
+      field.sizeRefRange = sizeToken.range;
+      this.expectPunctuation("]", "Expected ']' after reserved size.");
     } else if (typeToken.value === "enum" && this.matchPunctuation("<")) {
       field.typeKind = "inlineEnum";
       const underlying = this.expectIdentifier("Expected enum underlying type.");
@@ -418,15 +470,61 @@ class Parser {
         values: [],
       };
       this.expectPunctuation(">", "Expected '>' after enum underlying type.");
+    } else if (this.matchPunctuation("[")) {
+      const sizeToken = this.expectToken(
+          (token) => token.kind === "number" || token.kind === "identifier" || token.kind === "string",
+          "Expected field size or field reference.",
+      );
+      if (["bytes", "string", "ascii", "utf8"].includes(typeToken.value)) {
+        if (sizeToken.kind === "number") {
+          field.fixedSize = parseIntegerLiteral(sizeToken.value);
+        } else {
+          field.sizeRef = sizeToken.value;
+          field.sizeRefRange = sizeToken.range;
+        }
+      } else {
+        field.typeKind = "collection";
+        field.referencedType = typeToken.value;
+        if (sizeToken.kind === "number") {
+          field.fixedCount = parseIntegerLiteral(sizeToken.value);
+        } else {
+          field.countRef = sizeToken.value;
+          field.countRefRange = sizeToken.range;
+        }
+      }
+      this.expectPunctuation("]", "Expected ']' after field size.");
     }
 
     if (this.matchPunctuation("=")) {
-      field.expectToken = this.expectToken((token) => token.kind === "number", "Expected numeric value.");
+      const expected = this.expectToken((token) => token.kind === "number", "Expected numeric value.");
+      field.expectedValue = expected.value;
+      field.expectedValueRange = expected.range;
     }
-    if (this.isIdentifierAhead("checksum") && this.isPunctuationAhead(1, "(")) {
-      this.index += 1;
-      field.checksum = this.parseChecksum();
+
+    while (true) {
+      if (this.isIdentifierAhead("checksum") && this.isPunctuationAhead(1, "(")) {
+        this.index += 1;
+        field.checksum = this.parseChecksum();
+        continue;
+      }
+      if (this.isIdentifierAhead("present") && this.isPunctuationAhead(1, "(")) {
+        this.index += 1;
+        field.presence = this.parsePresence();
+        continue;
+      }
+      if (this.isIdentifierAhead("if") && this.isPunctuationAhead(1, "(")) {
+        this.index += 1;
+        field.condition = this.parseCondition("field");
+        continue;
+      }
+      if (this.isIdentifierAhead("align") && this.isPunctuationAhead(1, "(")) {
+        this.index += 1;
+        field.alignment = this.parseAlignment();
+        continue;
+      }
+      break;
     }
+
     if (this.matchPunctuation("{")) {
       if (field.typeKind === "inlineEnum") {
         field.inlineEnum.values = this.parseEnumValues();
@@ -435,8 +533,24 @@ class Parser {
       }
     }
 
-    layout.fieldMap.set(field.name, field);
     return field;
+  }
+
+  parseVariantCases() {
+    const cases = [];
+    while (!this.matchPunctuation("}")) {
+      const tagValue = this.expectToken((token) => token.kind === "number", "Expected variant tag value.");
+      this.expectPunctuation("=", "Expected '=' in variant case.");
+      const referenced = this.expectIdentifier("Expected variant case type.");
+      cases.push({
+        tag: tagValue.value,
+        tagRange: tagValue.range,
+        referencedType: referenced.value,
+        referencedTypeRange: referenced.range,
+      });
+      this.matchPunctuation(",");
+    }
+    return cases;
   }
 
   parseChecksum() {
@@ -464,6 +578,101 @@ class Parser {
     }
     this.expectPunctuation(")", "Expected ')' after checksum.");
     return checksum;
+  }
+
+  parsePresence() {
+    const presence = {
+      field: null,
+      fieldRange: null,
+      bit: null,
+      bitRange: null,
+    };
+    this.expectPunctuation("(", "Expected '(' after present.");
+    const field = this.expectIdentifier("Expected presence field.");
+    presence.field = field.value;
+    presence.fieldRange = field.range;
+    this.expectPunctuation(",", "Expected ',' after presence field.");
+    const bit = this.expectToken((token) => token.kind === "number", "Expected presence bit index.");
+    presence.bit = parseIntegerLiteral(bit.value);
+    presence.bitRange = bit.range;
+    this.expectPunctuation(")", "Expected ')' after present clause.");
+    return presence;
+  }
+
+  parseCondition(subject) {
+    const condition = {
+      field: null,
+      fieldRange: null,
+      value: null,
+      valueRange: null,
+    };
+    this.expectPunctuation("(", `Expected '(' after ${subject === "validation" ? "if" : "if"}.`);
+    const field = this.expectIdentifier("Expected condition field.");
+    condition.field = field.value;
+    condition.fieldRange = field.range;
+    this.expectPunctuation("==", "Expected '==' in condition.");
+    const value = this.expectToken((token) => token.kind === "number", "Expected condition value.");
+    condition.value = parseIntegerLiteral(value.value);
+    condition.valueRange = value.range;
+    this.expectPunctuation(")", "Expected ')' after condition.");
+    return condition;
+  }
+
+  parseAlignment() {
+    this.expectPunctuation("(", "Expected '(' after align.");
+    const alignment = this.expectToken((token) => token.kind === "number", "Expected alignment value.");
+    this.expectPunctuation(")", "Expected ')' after align.");
+    return {
+      value: parseIntegerLiteral(alignment.value),
+      range: alignment.range,
+    };
+  }
+
+  parseValidation(layout) {
+    const validation = {
+      layout,
+      field: null,
+      fieldRange: null,
+      operator: null,
+      operatorRange: null,
+      otherField: null,
+      otherFieldRange: null,
+      value: null,
+      valueRange: null,
+      multiplier: null,
+      multiplierRange: null,
+      when: null,
+    };
+    this.expectPunctuation("(", "Expected '(' after validate.");
+    const lhs = this.expectIdentifier("Expected validation field.");
+    validation.field = lhs.value;
+    validation.fieldRange = lhs.range;
+    const op = this.expectToken((token) => token.kind === "punctuation" && comparisonOperators.has(token.value),
+        "Expected a validation comparison operator.");
+    validation.operator = op.value;
+    validation.operatorRange = op.range;
+    const rhs = this.expectToken((token) => token.kind === "identifier" || token.kind === "number",
+        "Expected validation right-hand side.");
+    if (rhs.kind === "identifier") {
+      validation.otherField = rhs.value;
+      validation.otherFieldRange = rhs.range;
+      if (this.matchPunctuation("*")) {
+        const multiplier = this.expectToken((token) => token.kind === "number", "Expected validation multiplier.");
+        validation.multiplier = parseIntegerLiteral(multiplier.value);
+        validation.multiplierRange = multiplier.range;
+      }
+    } else {
+      validation.value = parseIntegerLiteral(rhs.value);
+      validation.valueRange = rhs.range;
+    }
+    if (this.matchPunctuation(",")) {
+      if (!this.matchIdentifier("if")) {
+        throw new ParseError("Expected 'if' after validation comma.", this.peek().range);
+      }
+      validation.when = this.parseCondition("validation");
+    }
+    this.expectPunctuation(")", "Expected ')' after validate.");
+    return validation;
   }
 
   parseEnumValues() {
@@ -509,8 +718,7 @@ class Parser {
   }
 
   expectPunctuation(value, message) {
-    const token = this.expectToken((token) => token.kind === "punctuation" && token.value === value, message);
-    return token;
+    return this.expectToken((token) => token.kind === "punctuation" && token.value === value, message);
   }
 
   expectToken(predicate, message) {
@@ -645,15 +853,38 @@ function validateDocument(document, symbols = null) {
       } else {
         seenFields.set(field.name, field);
       }
+
       if (field.typeKind === "named" && !enumMap.has(field.typeToken) && !structMap.has(field.typeToken)) {
         diagnostics.push(diagnostic(field.typeRange, `Unknown type '${field.typeToken}'.`));
+      }
+      if (field.typeKind === "collection" && !structMap.has(field.referencedType)) {
+        diagnostics.push(diagnostic(field.typeRange, `Unknown collection element type '${field.referencedType}'.`));
       }
       if (field.sizeRef && !hasPriorField(layout, field, field.sizeRef)) {
         diagnostics.push(diagnostic(field.sizeRefRange, `Unknown prior field '${field.sizeRef}'.`));
       }
+      if (field.countRef && !hasPriorField(layout, field, field.countRef)) {
+        diagnostics.push(diagnostic(field.countRefRange, `Unknown prior field '${field.countRef}'.`));
+      }
+      if (field.variantTag && !hasPriorField(layout, field, field.variantTag)) {
+        diagnostics.push(diagnostic(field.variantTagRange, `Unknown prior field '${field.variantTag}'.`));
+      }
+      for (const variantCase of field.variantCases || []) {
+        if (!structMap.has(variantCase.referencedType)) {
+          diagnostics.push(diagnostic(variantCase.referencedTypeRange,
+              `Unknown variant case type '${variantCase.referencedType}'.`));
+        }
+      }
+      if (field.presence && !hasPriorField(layout, field, field.presence.field)) {
+        diagnostics.push(diagnostic(field.presence.fieldRange, `Unknown prior field '${field.presence.field}'.`));
+      }
+      if (field.condition && !hasPriorField(layout, field, field.condition.field)) {
+        diagnostics.push(diagnostic(field.condition.fieldRange, `Unknown prior field '${field.condition.field}'.`));
+      }
       if (field.checksum) {
         if (!checksumAlgorithms.includes(field.checksum.algorithm)) {
-          diagnostics.push(diagnostic(field.checksum.algorithmRange, `Unknown checksum algorithm '${field.checksum.algorithm}'.`));
+          diagnostics.push(diagnostic(field.checksum.algorithmRange,
+              `Unknown checksum algorithm '${field.checksum.algorithm}'.`));
         }
         if (field.checksum.fromRange) {
           validateAnchor(layout, field.checksum.from, field.checksum.fromRange, diagnostics);
@@ -661,6 +892,18 @@ function validateDocument(document, symbols = null) {
         if (field.checksum.toRange) {
           validateAnchor(layout, field.checksum.to, field.checksum.toRange, diagnostics);
         }
+      }
+    }
+
+    for (const validation of layout.validations) {
+      if (!layout.fieldMap.has(validation.field)) {
+        diagnostics.push(diagnostic(validation.fieldRange, `Unknown validation field '${validation.field}'.`));
+      }
+      if (validation.otherField && !layout.fieldMap.has(validation.otherField)) {
+        diagnostics.push(diagnostic(validation.otherFieldRange, `Unknown validation field '${validation.otherField}'.`));
+      }
+      if (validation.when && !layout.fieldMap.has(validation.when.field)) {
+        diagnostics.push(diagnostic(validation.when.fieldRange, `Unknown validation field '${validation.when.field}'.`));
       }
     }
   }
@@ -881,10 +1124,26 @@ function findLayoutByPosition(document, position) {
     for (const field of layout.fields) {
       if (positionInRange(position, field.nameRange) || positionInRange(position, field.typeRange) ||
           (field.sizeRefRange && positionInRange(position, field.sizeRefRange)) ||
+          (field.countRefRange && positionInRange(position, field.countRefRange)) ||
+          (field.variantTagRange && positionInRange(position, field.variantTagRange)) ||
+          (field.presence?.fieldRange && positionInRange(position, field.presence.fieldRange)) ||
+          (field.condition?.fieldRange && positionInRange(position, field.condition.fieldRange)) ||
           (field.checksum?.algorithmRange && positionInRange(position, field.checksum.algorithmRange)) ||
           (field.checksum?.fromRange && positionInRange(position, field.checksum.fromRange)) ||
           (field.checksum?.toRange && positionInRange(position, field.checksum.toRange))) {
-        return { layout, field };
+        return { layout, field, validation: null };
+      }
+      for (const variantCase of field.variantCases || []) {
+        if (positionInRange(position, variantCase.referencedTypeRange)) {
+          return { layout, field, variantCase, validation: null };
+        }
+      }
+    }
+    for (const validation of layout.validations) {
+      if (positionInRange(position, validation.fieldRange) ||
+          (validation.otherFieldRange && positionInRange(position, validation.otherFieldRange)) ||
+          (validation.when?.fieldRange && positionInRange(position, validation.when.fieldRange))) {
+        return { layout, field: null, validation };
       }
     }
   }
@@ -907,19 +1166,46 @@ function findSymbolAt(document, position, symbols = null) {
     return null;
   }
 
-  const { layout, field } = context;
-  if (positionInRange(position, field.typeRange) && field.typeKind === "named") {
-    const enumEntry = symbols?.enums?.get(field.typeToken);
-    if (enumEntry) {
-      return enumEntry;
+  if (context.validation) {
+    const { layout, validation } = context;
+    if (positionInRange(position, validation.fieldRange)) {
+      return { kind: "field", item: layout.fieldMap.get(validation.field), uri: null };
     }
-    const structEntry = symbols?.structs?.get(field.typeToken);
-    if (structEntry) {
-      return structEntry;
+    if (validation.otherFieldRange && positionInRange(position, validation.otherFieldRange)) {
+      return { kind: "field", item: layout.fieldMap.get(validation.otherField), uri: null };
+    }
+    if (validation.when?.fieldRange && positionInRange(position, validation.when.fieldRange)) {
+      return { kind: "field", item: layout.fieldMap.get(validation.when.field), uri: null };
+    }
+    return null;
+  }
+
+  const { layout, field, variantCase } = context;
+  if (variantCase && positionInRange(position, variantCase.referencedTypeRange)) {
+    return symbols?.structs?.get(variantCase.referencedType) || null;
+  }
+  if (positionInRange(position, field.typeRange)) {
+    if (field.typeKind === "named") {
+      return symbols?.enums?.get(field.typeToken) || symbols?.structs?.get(field.typeToken) || null;
+    }
+    if (field.typeKind === "collection") {
+      return symbols?.structs?.get(field.referencedType) || null;
     }
   }
   if (field.sizeRefRange && positionInRange(position, field.sizeRefRange)) {
     return { kind: "field", item: layout.fieldMap.get(field.sizeRef), uri: null };
+  }
+  if (field.countRefRange && positionInRange(position, field.countRefRange)) {
+    return { kind: "field", item: layout.fieldMap.get(field.countRef), uri: null };
+  }
+  if (field.variantTagRange && positionInRange(position, field.variantTagRange)) {
+    return { kind: "field", item: layout.fieldMap.get(field.variantTag), uri: null };
+  }
+  if (field.presence?.fieldRange && positionInRange(position, field.presence.fieldRange)) {
+    return { kind: "field", item: layout.fieldMap.get(field.presence.field), uri: null };
+  }
+  if (field.condition?.fieldRange && positionInRange(position, field.condition.fieldRange)) {
+    return { kind: "field", item: layout.fieldMap.get(field.condition.field), uri: null };
   }
   if (field.checksum?.fromRange && positionInRange(position, field.checksum.fromRange)) {
     const target = anchorField(layout, field.checksum.from);
@@ -962,12 +1248,27 @@ function completionItems(document, position, text, symbols) {
     return checksumAnchorCompletions(context.layout);
   }
 
+  if (/variant\s*\(\s*[A-Za-z0-9_.-]*$/.test(prefix) && context?.field) {
+    return priorFieldCompletions(context.layout, context.field);
+  }
+  if (/present\s*\(\s*[A-Za-z0-9_.-]*$/.test(prefix) && context?.field) {
+    return priorFieldCompletions(context.layout, context.field);
+  }
+  if (/\bif\s*\(\s*[A-Za-z0-9_.-]*$/.test(prefix) && context?.layout) {
+    return layoutFieldCompletions(context.layout);
+  }
+
   const sizeMatch = prefix.match(/\[\s*([A-Za-z0-9_.-]*)$/);
-  if (sizeMatch && context) {
+  if (sizeMatch && context?.field) {
     return priorFieldCompletions(context.layout, context.field);
   }
 
-  const typeMatch = prefix.match(/:\s*([A-Za-z0-9_.-]*)$/);
+  const validateMatch = prefix.match(/validate\s*\(\s*([A-Za-z0-9_.-]*)$/);
+  if (validateMatch && context?.layout) {
+    return layoutFieldCompletions(context.layout);
+  }
+
+  const typeMatch = prefix.match(/:\s*([A-Za-z_][A-Za-z0-9_.-]*)?$/);
   if (typeMatch) {
     const enumItems = [...(symbols?.enums?.values() || [])]
         .map((entry) => entry.item.name)
@@ -984,6 +1285,10 @@ function completionItems(document, position, text, symbols) {
     ];
   }
 
+  if (context?.layout) {
+    return layoutKeywords.map((keyword) => makeCompletion(keyword, CompletionItemKind.Keyword, "Layout keyword"));
+  }
+
   return topLevelKeywords.map((keyword) => makeCompletion(keyword, CompletionItemKind.Keyword, "UPR keyword"));
 }
 
@@ -996,6 +1301,10 @@ function priorFieldCompletions(layout, field) {
     items.push(makeCompletion(candidate.name, CompletionItemKind.Field, "Prior field"));
   }
   return items;
+}
+
+function layoutFieldCompletions(layout) {
+  return layout.fields.map((field) => makeCompletion(field.name, CompletionItemKind.Field, "Field"));
 }
 
 function checksumAnchorCompletions(layout) {
@@ -1037,6 +1346,7 @@ function hoverFor(document, position, symbols = null) {
       range: symbol.item.nameRange,
     };
   }
+
   const context = findLayoutByPosition(document, position);
   if (context?.field?.checksum?.algorithmRange && positionInRange(position, context.field.checksum.algorithmRange)) {
     return {
@@ -1045,6 +1355,26 @@ function hoverFor(document, position, symbols = null) {
         value: `**checksum ${context.field.checksum.algorithm}**`,
       }],
       range: context.field.checksum.algorithmRange,
+    };
+  }
+  if (context?.field?.variantTagRange && positionInRange(position, context.field.variantTagRange)) {
+    return {
+      contents: [{
+        kind: "markdown",
+        value: `**variant ${context.field.name}**\n\nTag field: \`${context.field.variantTag}\``,
+      }],
+      range: context.field.variantTagRange,
+    };
+  }
+  if (context?.validation?.operatorRange && positionInRange(position, context.validation.operatorRange)) {
+    return {
+      contents: [{
+        kind: "markdown",
+        value: `**validation**\n\nCompares \`${context.validation.field}\` ${context.validation.operator} ${
+          context.validation.otherField ? `\`${context.validation.otherField}\`` : `\`${context.validation.value}\``
+        }`,
+      }],
+      range: context.validation.operatorRange,
     };
   }
   return null;
@@ -1084,7 +1414,7 @@ function handleMessage(message) {
           definitionProvider: true,
           hoverProvider: true,
           completionProvider: {
-            triggerCharacters: [":", "[", "(", ",", "."],
+            triggerCharacters: [":", "[", "(", ",", ".", "*"],
           },
         },
       });

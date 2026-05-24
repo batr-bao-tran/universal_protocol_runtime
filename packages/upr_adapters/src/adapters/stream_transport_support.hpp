@@ -20,10 +20,20 @@
 
 namespace universal_protocol_runtime::stream_transport_support {
 
+/**
+ * @brief Converts `errno` into a transport `Status`.
+ * @param operation Name of the failing operation.
+ * @return Error status describing the failure.
+ */
 inline Status status_from_errno(const std::string& operation) {
   return io_error(operation + ": " + std::string(std::strerror(errno)));
 }
 
+/**
+ * @brief Enables non-blocking mode for a file descriptor.
+ * @param fd File descriptor to update.
+ * @return Status describing success or failure.
+ */
 inline Status set_non_blocking(int fd) {
   const int existing_flags = ::fcntl(fd, F_GETFL, 0);
   if (existing_flags < 0) {
@@ -35,6 +45,13 @@ inline Status set_non_blocking(int fd) {
   return Status::ok_status();
 }
 
+/**
+ * @brief Waits for readiness events on a file descriptor.
+ * @param fd File descriptor to poll.
+ * @param events Requested `poll(2)` event mask.
+ * @param timeout_ms Poll timeout in milliseconds.
+ * @return `true` when the descriptor became ready.
+ */
 inline StatusOr<bool> wait_for_fd(int fd, short events, int timeout_ms) {
   if (fd < 0) {
     return invalid_argument("Cannot wait on a closed file descriptor.");
@@ -55,6 +72,14 @@ inline StatusOr<bool> wait_for_fd(int fd, short events, int timeout_ms) {
   return true;
 }
 
+/**
+ * @brief Reads from a file descriptor into a destination span.
+ * @param fd File descriptor to read from.
+ * @param destination Destination byte span.
+ * @param open_flag Optional flag updated on end-of-stream.
+ * @param operation Operation name for error reporting.
+ * @return Read result describing the read outcome.
+ */
 inline ReadResult read_from_fd(int fd, MutableByteSpan destination, bool* open_flag, const char* operation) {
   ssize_t bytes_read;
   do {
@@ -75,6 +100,13 @@ inline ReadResult read_from_fd(int fd, MutableByteSpan destination, bool* open_f
   return {.status = status_from_errno(operation)};
 }
 
+/**
+ * @brief Receives bytes from a socket into a destination span.
+ * @param fd Socket file descriptor to read from.
+ * @param destination Destination byte span.
+ * @param open_flag Optional flag updated on end-of-stream.
+ * @return Read result describing the receive outcome.
+ */
 inline ReadResult recv_from_socket(int fd, MutableByteSpan destination, bool* open_flag) {
   ssize_t bytes_read;
   do {
@@ -95,6 +127,13 @@ inline ReadResult recv_from_socket(int fd, MutableByteSpan destination, bool* op
   return {.status = status_from_errno("recv")};
 }
 
+/**
+ * @brief Writes bytes to a file descriptor.
+ * @param fd File descriptor to write to.
+ * @param source Source byte span.
+ * @param operation Operation name for error reporting.
+ * @return Write result describing the write outcome.
+ */
 inline WriteResult write_to_fd(int fd, ByteSpan source, const char* operation) {
   ssize_t bytes_written;
   do {
@@ -109,6 +148,12 @@ inline WriteResult write_to_fd(int fd, ByteSpan source, const char* operation) {
   return {.status = status_from_errno(operation)};
 }
 
+/**
+ * @brief Sends bytes to a socket.
+ * @param fd Socket file descriptor to write to.
+ * @param source Source byte span.
+ * @return Write result describing the send outcome.
+ */
 inline WriteResult send_to_socket(int fd, ByteSpan source) {
   ssize_t bytes_written;
   do {
@@ -123,6 +168,13 @@ inline WriteResult send_to_socket(int fd, ByteSpan source) {
   return {.status = status_from_errno("send")};
 }
 
+/**
+ * @brief Writes multiple byte spans with `writev` or `sendmsg`.
+ * @param fd File descriptor or socket to write to.
+ * @param sources Source spans to transmit.
+ * @param socket_send `true` to use socket send semantics.
+ * @return Write result describing the vectored write outcome.
+ */
 inline WriteResult writev_to_fd(int fd, std::span<const ByteSpan> sources, bool socket_send) {
   std::vector<struct iovec> iovecs;
   iovecs.reserve(sources.size());
@@ -160,6 +212,11 @@ inline WriteResult writev_to_fd(int fd, std::span<const ByteSpan> sources, bool 
   return {.status = status_from_errno(socket_send ? "sendmsg" : "writev")};
 }
 
+/**
+ * @brief Closes a file descriptor when it is open.
+ * @param fd File descriptor to close.
+ * @return Status describing success or failure.
+ */
 inline Status close_fd(int fd) {
   if (fd < 0) {
     return Status::ok_status();
@@ -170,6 +227,13 @@ inline Status close_fd(int fd) {
   return Status::ok_status();
 }
 
+/**
+ * @brief Applies socket send and receive buffer sizes.
+ * @param fd Socket file descriptor to configure.
+ * @param send_buffer_bytes Requested send buffer size in bytes.
+ * @param receive_buffer_bytes Requested receive buffer size in bytes.
+ * @return Status describing success or failure.
+ */
 inline Status configure_socket_buffers(int fd, int send_buffer_bytes, int receive_buffer_bytes) {
   if (send_buffer_bytes > 0 &&
       ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &send_buffer_bytes, sizeof(send_buffer_bytes)) < 0) {
@@ -182,6 +246,12 @@ inline Status configure_socket_buffers(int fd, int send_buffer_bytes, int receiv
   return Status::ok_status();
 }
 
+/**
+ * @brief Renders the local or peer endpoint for a socket as text.
+ * @param fd Socket file descriptor to inspect.
+ * @param peer `true` to return the peer endpoint, `false` for the local endpoint.
+ * @return Endpoint string when inspection succeeds.
+ */
 inline std::string socket_endpoint_string(int fd, bool peer) {
   sockaddr_storage address{};
   socklen_t address_length = sizeof(address);

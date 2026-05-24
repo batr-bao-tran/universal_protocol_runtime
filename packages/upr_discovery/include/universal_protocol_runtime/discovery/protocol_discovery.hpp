@@ -13,6 +13,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Heuristic description of a likely length field inside sampled messages.
+ */
 struct LengthFieldInference {
   size_t offset = 0;
   uint8_t width_bytes = 0;
@@ -20,6 +23,9 @@ struct LengthFieldInference {
   size_t trailing_fixed_bytes = 0;
 };
 
+/**
+ * @brief One discovered message cluster inferred from sampled frames.
+ */
 struct DiscoveredMessage {
   std::string name;
   size_t sample_count = 0;
@@ -34,6 +40,9 @@ struct DiscoveredMessage {
   MessageDefinition draft_message;
 };
 
+/**
+ * @brief Aggregate discovery result for one sampled protocol.
+ */
 struct DiscoveryReport {
   std::string protocol_name;
   size_t frames_analyzed = 0;
@@ -43,6 +52,9 @@ struct DiscoveryReport {
   ProtocolDefinition draft_protocol;
 };
 
+/**
+ * @brief Options controlling heuristic protocol discovery.
+ */
 struct DiscoveryOptions {
   std::string protocol_name = "discovered_protocol";
   size_t max_common_prefix_bytes = 4;
@@ -52,6 +64,12 @@ struct DiscoveryOptions {
   bool cluster_by_first_byte = true;
 };
 
+/**
+ * @brief Infers a draft protocol definition from sampled framed payloads.
+ * @param frames Sampled framed payloads to analyze.
+ * @param options Discovery heuristics and output controls.
+ * @return Discovery report or an error status.
+ */
 StatusOr<DiscoveryReport> discover_protocol_from_samples(const std::vector<std::vector<std::byte>>& frames,
                                                          const DiscoveryOptions& options = {});
 

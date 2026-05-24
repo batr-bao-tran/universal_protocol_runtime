@@ -6,6 +6,11 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Validates and compiles a protocol definition into runtime metadata.
+ * @param definition Authoring-time protocol definition.
+ * @return Compiled protocol metadata or an error status.
+ */
 StatusOr<CompiledProtocol> compile_protocol(const ProtocolDefinition& definition);
 
 }  // namespace universal_protocol_runtime

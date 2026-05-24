@@ -1,0 +1,60 @@
+protocol: advanced_market_data
+structs:
+  - name: Level
+    fields:
+      - name: price
+        type: uint16
+      - name: qty
+        type: uint16
+  - name: QuoteDetail
+    fields:
+      - name: best_bid
+        type: uint16
+      - name: best_ask
+        type: uint16
+  - name: TradeDetail
+    fields:
+      - name: trade_id
+        type: uint64
+messages:
+  - name: Snapshot
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 1
+      - name: level_count
+        type: uint8
+      - name: levels
+        type: Level
+        count_from: level_count
+  - name: Event
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 2
+      - name: kind
+        type: uint8
+      - name: detail
+        type: variant
+        tag_from: kind
+        cases:
+          1: QuoteDetail
+          2: TradeDetail
+  - name: Quote
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 3
+      - name: presence
+        type: uint8
+      - name: note_len
+        type: uint8
+        present:
+          field: presence
+          bit: 0
+      - name: note
+        type: utf8
+        size_from: note_len
+        present:
+          field: presence
+          bit: 0

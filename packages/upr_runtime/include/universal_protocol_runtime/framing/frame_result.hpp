@@ -11,12 +11,20 @@ enum class FrameStatus {
   kInvalidFrame,
 };
 
+/**
+ * @brief Byte-range description for one extracted frame.
+ */
 struct FrameSlice {
   size_t offset = 0;
   size_t size = 0;
   size_t bytes_consumed = 0;
 };
 
+/**
+ * @brief Converts a frame status to a stable string view.
+ * @param status Frame status value.
+ * @return String representation of the frame status.
+ */
 constexpr std::string_view to_string(FrameStatus status) noexcept {
   switch (status) {
     case FrameStatus::kReady:

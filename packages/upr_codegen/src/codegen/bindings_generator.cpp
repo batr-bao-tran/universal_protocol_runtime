@@ -216,6 +216,10 @@ std::string cpp_field_kind_literal(FieldKind kind) {
       return "universal_protocol_runtime::FieldKind::kStruct";
     case FieldKind::kEnum:
       return "universal_protocol_runtime::FieldKind::kEnum";
+    case FieldKind::kCollection:
+      return "universal_protocol_runtime::FieldKind::kCollection";
+    case FieldKind::kVariant:
+      return "universal_protocol_runtime::FieldKind::kVariant";
   }
   return "universal_protocol_runtime::FieldKind::kUnsigned";
 }
@@ -518,6 +522,22 @@ void append_cpp_view_accessor(std::string* out, const CompiledField& field, int 
                   "return message_ == nullptr ? std::nullopt : message_->get_enum_name(" + constant_name + ");");
       append_line(out, indent, "}");
       return;
+    case FieldKind::kCollection:
+      append_line(out,
+                  indent,
+                  "std::optional<universal_protocol_runtime::DecodedCollectionView> " + method_name + "() const {");
+      append_line(out,
+                  indent + 1,
+                  "return message_ == nullptr ? std::nullopt : message_->get_collection(" + constant_name + ");");
+      append_line(out, indent, "}");
+      return;
+    case FieldKind::kVariant:
+      append_line(
+          out, indent, "std::optional<universal_protocol_runtime::DecodedMessage> " + method_name + "() const {");
+      append_line(
+          out, indent + 1, "return message_ == nullptr ? std::nullopt : message_->get_variant(" + constant_name + ");");
+      append_line(out, indent, "}");
+      return;
   }
 }
 
@@ -538,6 +558,10 @@ std::string cpp_generated_value_type(const CompiledField& field) {
       return "std::string_view";
     case FieldKind::kStruct:
       return "universal_protocol_runtime::DecodedMessage";
+    case FieldKind::kCollection:
+      return "universal_protocol_runtime::DecodedCollectionView";
+    case FieldKind::kVariant:
+      return "universal_protocol_runtime::DecodedMessage";
   }
   return "uint64_t";
 }
@@ -554,6 +578,8 @@ std::string cpp_generated_value_initializer(const CompiledField& field) {
     case FieldKind::kBytes:
     case FieldKind::kString:
     case FieldKind::kStruct:
+    case FieldKind::kCollection:
+    case FieldKind::kVariant:
       return ";";
   }
   return ";";
@@ -588,6 +614,10 @@ std::string cpp_generated_extract_expression(const CompiledField& field) {
                  : "message->get_fixed_string<" + std::to_string(field.fixed_size) + ">(" + constant_name + ")";
     case FieldKind::kStruct:
       return "message->get_struct(" + constant_name + ")";
+    case FieldKind::kCollection:
+      return "message->get_collection(" + constant_name + ")";
+    case FieldKind::kVariant:
+      return "message->get_variant(" + constant_name + ")";
   }
   return "std::nullopt";
 }
@@ -608,6 +638,8 @@ std::string cpp_generated_extract_assignment(const CompiledField& field, std::st
     case FieldKind::kFloat64:
     case FieldKind::kStruct:
     case FieldKind::kEnum:
+    case FieldKind::kCollection:
+    case FieldKind::kVariant:
       return "*" + std::string(extracted_name);
   }
   return "*" + std::string(extracted_name);
@@ -625,7 +657,10 @@ bool checksum_algorithm_supports_direct_value_decode(std::string_view algorithm_
 bool layout_supports_direct_value_decode(const CompiledMessage& layout) {
   return std::all_of(layout.fields().begin(),
                      layout.fields().end(),
-                     [](const CompiledField& field) { return field.kind != FieldKind::kStruct; }) &&
+                     [](const CompiledField& field) {
+                       return field.kind != FieldKind::kStruct && field.kind != FieldKind::kCollection &&
+                              field.kind != FieldKind::kVariant && !field.has_condition && !field.has_presence;
+                     }) &&
          std::all_of(layout.checksums().begin(), layout.checksums().end(), [](const CompiledChecksum& checksum) {
            return checksum_algorithm_supports_direct_value_decode(checksum.algorithm_name);
          });
@@ -942,6 +977,8 @@ void append_cpp_direct_decode_function(
         case FieldKind::kBytes:
         case FieldKind::kString:
         case FieldKind::kStruct:
+        case FieldKind::kCollection:
+        case FieldKind::kVariant:
           break;
       }
       append_line(out, indent + 1, "offset += " + field_size_name + ";");
@@ -1195,6 +1232,8 @@ void append_cpp_direct_encode_function(
         case FieldKind::kBytes:
         case FieldKind::kString:
         case FieldKind::kStruct:
+        case FieldKind::kCollection:
+        case FieldKind::kVariant:
           break;
       }
       append_line(out, indent + 1, "cursor += " + field_size_constant_name + ";");
