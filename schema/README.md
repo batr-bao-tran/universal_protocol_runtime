@@ -2,6 +2,12 @@
 
 UPR schemas describe binary protocol layouts. The recommended file extension is `.upr`.
 
+For compact end-to-end samples, see
+[examples/schema/advanced_market_data.upr](../examples/schema/advanced_market_data.upr),
+[examples/schema/advanced_market_data.yaml](../examples/schema/advanced_market_data.yaml),
+[examples/schema/hardware_telemetry.upr](../examples/schema/hardware_telemetry.upr), and
+[examples/schema/hardware_telemetry.yaml](../examples/schema/hardware_telemetry.yaml).
+
 ## File Structure
 
 A schema usually contains:
@@ -15,7 +21,7 @@ A schema usually contains:
 ```text
 protocol market_data
 
-import "examples/order_types.upr"
+import "examples/schema/order_types.upr"
 
 enum Side: uint8 { 1 = Buy, 2 = Sell }
 
@@ -43,7 +49,7 @@ Use `import` to reuse shared enums, structs, or message fragments:
 ```text
 protocol market_data
 
-import "examples/order_types.upr"
+import "examples/schema/order_types.upr"
 
 message Order {
   message_type: uint8 = 1
@@ -57,14 +63,14 @@ Import resolution is done once when loading from a file. You can use the loaded 
 Import path rules:
 
 - `./shared/types.upr` and `../shared/types.upr` are resolved relative to the importing file
-- `examples/order_types.upr` is resolved from the Bazel workspace root when one is present
+- `examples/schema/order_types.upr` is resolved from the Bazel workspace root when one is present
 
 YAML uses the equivalent top-level `imports` list:
 
 ```yaml
 protocol: market_data
 imports:
-  - examples/order_types.yaml
+  - examples/schema/order_types.yaml
 ```
 
 ## Supported Field Types
@@ -144,6 +150,70 @@ payload: bytes[payload_length]
 symbol: ascii[name_length]
 ```
 
+## Repeating Groups
+
+Use a fixed count or an earlier field as the element count for a named struct:
+
+```text
+struct Level {
+  price: uint32
+  qty: uint32
+}
+
+message Snapshot {
+  level_count: uint8
+  levels: Level[level_count]
+}
+```
+
+Collections are decoded as borrowed collection views, and element structs are decoded on demand.
+
+## Tagged Variants
+
+Use `variant(tag_field)` when the payload shape depends on an earlier scalar or enum field:
+
+```text
+struct QuoteDetail { best_bid: uint32 best_ask: uint32 }
+struct TradeDetail { trade_id: uint64 }
+
+message Event {
+  kind: uint8
+  detail: variant(kind) { 1 = QuoteDetail, 2 = TradeDetail }
+}
+```
+
+At decode time, the runtime chooses the matching case from the tag value and exposes it as a nested decoded message.
+
+## Optional Fields
+
+Use `present(field, bit)` to model sparse fields controlled by a bitmap:
+
+```text
+message Quote {
+  presence: uint8
+  note_len: uint8 present(presence, 0)
+  note: utf8[note_len] present(presence, 0)
+}
+```
+
+If the selected presence bit is clear, the field is treated as absent and contributes no bytes.
+
+## Reserved Bytes, Alignment, and Validation
+
+Use reserved gaps, alignment hints, and validation rules when the wire format has padding or semantic constraints:
+
+```text
+message SensorPacket {
+  version: uint8
+  pad: reserved[2] align(4)
+  sample_bytes_len: uint16
+  sample_count: uint8
+  validate(sample_bytes_len == sample_count * 4, if(version == 2))
+}
+```
+
+Reserved bytes must match their declared fill byte on decode, and validations run after field decoding.
+
 ## Checksums
 
 Checksums are for integrity checking. A checksum field stores a value computed from part of the frame, so the decoder can verify that the bytes were not corrupted or truncated.
@@ -196,6 +266,27 @@ message Trade {
   price: float64
   quantity: uint32
 }
+```
+
+## Runtime Usage Patterns
+
+Partial decode:
+
+```cpp
+upr::DecodeFieldMask mask{};
+mask.selected_fields.fill(false);
+mask.selected_fields[*snapshot->find_field("levels")] = true;
+mask.selected_fields[*snapshot->find_field("detail")] = true;
+decoder.decode_as("Snapshot", upr::ByteSpan(frame.data(), frame.size()), &message, mask);
+```
+
+Segmented zero-copy encode:
+
+```cpp
+auto builder = encoder.build_segmented("SensorPacket", scratch);
+builder->set_unsigned(SensorPacket::Fields::kSampleBytesLen, payload.size());
+builder->attach_bytes(SensorPacket::Fields::kSampleBytes, payload);
+builder->finalize();
 ```
 
 ## YAML Support

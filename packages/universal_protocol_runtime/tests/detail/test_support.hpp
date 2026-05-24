@@ -16,6 +16,16 @@ namespace upr_test_support {
 
 namespace upr = universal_protocol_runtime;
 
+/**
+ * @brief Builds a scalar field definition for tests.
+ * @param name Field name.
+ * @param kind Scalar field kind.
+ * @param width_bytes Scalar width in bytes.
+ * @param byte_order Field byte order.
+ * @param has_expected_unsigned Whether the field has a fixed expected value.
+ * @param expected_unsigned Expected fixed unsigned value.
+ * @return Test field definition.
+ */
 inline upr::FieldDefinition make_scalar_field(std::string name,
                                               upr::FieldKind kind,
                                               uint8_t width_bytes,
@@ -35,6 +45,16 @@ inline upr::FieldDefinition make_scalar_field(std::string name,
   return field;
 }
 
+/**
+ * @brief Builds an enum field definition for tests.
+ * @param name Field name.
+ * @param width_bytes Enum storage width in bytes.
+ * @param enum_values Enumerators exposed by the field.
+ * @param byte_order Field byte order.
+ * @param has_expected_unsigned Whether the field has a fixed expected value.
+ * @param expected_unsigned Expected fixed unsigned value.
+ * @return Test field definition.
+ */
 inline upr::FieldDefinition make_enum_field(std::string name,
                                             uint8_t width_bytes,
                                             std::vector<upr::EnumValueDefinition> enum_values,
@@ -58,6 +78,13 @@ inline upr::FieldDefinition make_fixed_bytes_field(std::string name, size_t size
   field.has_expected_unsigned = false;
   field.expected_unsigned = 0;
   field.enum_values.clear();
+  return field;
+}
+
+inline upr::FieldDefinition make_reserved_field(std::string name, size_t size, uint8_t fill = 0) {
+  upr::FieldDefinition field = make_fixed_bytes_field(std::move(name), size);
+  field.is_reserved = true;
+  field.reserved_fill_byte = fill;
   return field;
 }
 
@@ -107,6 +134,33 @@ inline upr::FieldDefinition make_struct_field(std::string name, std::string refe
   return field;
 }
 
+inline upr::FieldDefinition make_collection_field(std::string name,
+                                                  std::string referenced_type,
+                                                  std::string count_from_field) {
+  upr::FieldDefinition field = make_struct_field(std::move(name), std::move(referenced_type));
+  field.kind = upr::FieldKind::kCollection;
+  field.count_from_field = std::move(count_from_field);
+  return field;
+}
+
+inline upr::FieldDefinition make_fixed_collection_field(std::string name, std::string referenced_type, size_t count) {
+  upr::FieldDefinition field = make_struct_field(std::move(name), std::move(referenced_type));
+  field.kind = upr::FieldKind::kCollection;
+  field.fixed_count = count;
+  return field;
+}
+
+inline upr::FieldDefinition make_variant_field(std::string name,
+                                               std::string tag_from_field,
+                                               std::vector<upr::VariantCaseDefinition> cases) {
+  upr::FieldDefinition field;
+  field.name = std::move(name);
+  field.kind = upr::FieldKind::kVariant;
+  field.tag_from_field = std::move(tag_from_field);
+  field.variant_cases = std::move(cases);
+  return field;
+}
+
 inline void add_bit_field(upr::FieldDefinition* field, upr::BitFieldDefinition bit_field) {
   field->bit_fields.push_back(std::move(bit_field));
 }
@@ -122,10 +176,66 @@ inline void add_checksum(upr::FieldDefinition* field,
   };
 }
 
+inline void set_condition(upr::FieldDefinition* field, std::string name, uint64_t equals_unsigned) {
+  field->condition = upr::ConditionDefinition{
+      .field = std::move(name),
+      .equals_unsigned = equals_unsigned,
+  };
+}
+
+inline void set_presence(upr::FieldDefinition* field, std::string name, uint8_t bit_index) {
+  field->presence = upr::PresenceDefinition{
+      .field = std::move(name),
+      .bit_index = bit_index,
+  };
+}
+
+inline void set_alignment(upr::FieldDefinition* field, size_t alignment) { field->alignment = alignment; }
+
+inline upr::ValidationRuleDefinition make_validation_against_value(std::string field,
+                                                                   upr::ValidationOperator op,
+                                                                   uint64_t value,
+                                                                   uint64_t multiplier = 1) {
+  upr::ValidationRuleDefinition rule;
+  rule.field = std::move(field);
+  rule.op = op;
+  rule.value = value;
+  rule.multiplier = multiplier;
+  return rule;
+}
+
+inline upr::ValidationRuleDefinition make_validation_against_field(std::string field,
+                                                                   upr::ValidationOperator op,
+                                                                   std::string other_field,
+                                                                   uint64_t multiplier = 1) {
+  upr::ValidationRuleDefinition rule;
+  rule.field = std::move(field);
+  rule.op = op;
+  rule.other_field = std::move(other_field);
+  rule.compare_to_field = true;
+  rule.multiplier = multiplier;
+  return rule;
+}
+
+inline void set_validation_condition(upr::ValidationRuleDefinition* rule, std::string field, uint64_t equals_unsigned) {
+  rule->when = upr::ConditionDefinition{
+      .field = std::move(field),
+      .equals_unsigned = equals_unsigned,
+  };
+}
+
 inline upr::StructDefinition make_struct(std::string name, std::vector<upr::FieldDefinition> fields) {
   upr::StructDefinition definition;
   definition.name = std::move(name);
   definition.fields = std::move(fields);
+  return definition;
+}
+
+inline upr::StructDefinition make_struct(std::string name,
+                                         std::vector<upr::FieldDefinition> fields,
+                                         std::vector<upr::ValidationRuleDefinition> validations) {
+  upr::StructDefinition definition = make_struct(std::move(name), std::move(fields));
+  definition.validations = std::move(validations);
   return definition;
 }
 
@@ -148,6 +258,15 @@ inline upr::MessageDefinition make_message(std::string name,
   message.name = std::move(name);
   message.fields = std::move(fields);
   message.allow_trailing_bytes = allow_trailing_bytes;
+  return message;
+}
+
+inline upr::MessageDefinition make_message(std::string name,
+                                           std::vector<upr::FieldDefinition> fields,
+                                           std::vector<upr::ValidationRuleDefinition> validations,
+                                           bool allow_trailing_bytes = false) {
+  upr::MessageDefinition message = make_message(std::move(name), std::move(fields), allow_trailing_bytes);
+  message.validations = std::move(validations);
   return message;
 }
 

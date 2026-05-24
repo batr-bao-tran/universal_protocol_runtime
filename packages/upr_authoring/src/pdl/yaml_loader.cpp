@@ -27,6 +27,8 @@ constexpr std::string_view kTypeString = "string";
 constexpr std::string_view kTypeAscii = "ascii";
 constexpr std::string_view kTypeUtf8 = "utf8";
 constexpr std::string_view kTypeEnum = "enum";
+constexpr std::string_view kTypeVariant = "variant";
+constexpr std::string_view kTypeReserved = "reserved";
 constexpr std::string_view kTypeUnsignedPrefix = "uint";
 constexpr std::string_view kTypeSignedPrefix = "int";
 constexpr std::string_view kTypeFloat32Prefix = "float32";
@@ -51,6 +53,29 @@ std::string to_lower(std::string value) {
     character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
   }
   return value;
+}
+
+StatusOr<ValidationOperator> parse_validation_operator(std::string_view value) {
+  const std::string normalized = to_lower(std::string(value));
+  if (normalized == "eq" || normalized == "==") {
+    return ValidationOperator::kEq;
+  }
+  if (normalized == "ne" || normalized == "!=") {
+    return ValidationOperator::kNe;
+  }
+  if (normalized == "lt" || normalized == "<") {
+    return ValidationOperator::kLt;
+  }
+  if (normalized == "le" || normalized == "<=") {
+    return ValidationOperator::kLe;
+  }
+  if (normalized == "gt" || normalized == ">") {
+    return ValidationOperator::kGt;
+  }
+  if (normalized == "ge" || normalized == ">=") {
+    return ValidationOperator::kGe;
+  }
+  return invalid_argument("Unsupported validation operator: " + std::string(value));
 }
 
 StatusOr<uint8_t> parse_width_token(std::string_view token, std::string_view prefix) {
@@ -152,6 +177,73 @@ StatusOr<ChecksumDefinition> parse_checksum(const YAML::Node& node) {
   return checksum;
 }
 
+StatusOr<ConditionDefinition> parse_condition(const YAML::Node& node) {
+  if (!node.IsMap() || !node["field"] || !node["equals"]) {
+    return invalid_argument("Conditional fields require 'field' and 'equals'.");
+  }
+  return ConditionDefinition{
+      .field = node["field"].as<std::string>(),
+      .equals_unsigned = node["equals"].as<uint64_t>(),
+  };
+}
+
+StatusOr<PresenceDefinition> parse_presence(const YAML::Node& node) {
+  if (!node.IsMap() || !node["field"] || !node["bit"]) {
+    return invalid_argument("Presence-gated fields require 'field' and 'bit'.");
+  }
+  return PresenceDefinition{
+      .field = node["field"].as<std::string>(),
+      .bit_index = static_cast<uint8_t>(node["bit"].as<uint32_t>()),
+  };
+}
+
+StatusOr<std::vector<VariantCaseDefinition>> parse_variant_cases(const YAML::Node& node) {
+  if (!node || !node.IsMap()) {
+    return invalid_argument("Variant cases require a mapping.");
+  }
+  std::vector<VariantCaseDefinition> cases;
+  cases.reserve(node.size());
+  for (const auto& item : node) {
+    cases.push_back({
+        .tag_value = item.first.as<uint64_t>(),
+        .referenced_type = item.second.as<std::string>(),
+    });
+  }
+  return cases;
+}
+
+StatusOr<ValidationRuleDefinition> parse_validation_rule(const YAML::Node& node) {
+  if (!node.IsMap() || !node["field"] || !node["op"]) {
+    return invalid_argument("Validation rules require 'field' and 'op'.");
+  }
+  ValidationRuleDefinition rule;
+  rule.field = node["field"].as<std::string>();
+  const auto op = parse_validation_operator(node["op"].as<std::string>());
+  if (!op.ok()) {
+    return op.status();
+  }
+  rule.op = op.value();
+  if (node["other_field"]) {
+    rule.compare_to_field = true;
+    rule.other_field = node["other_field"].as<std::string>();
+  } else if (node["value"]) {
+    rule.value = node["value"].as<uint64_t>();
+  } else {
+    return invalid_argument("Validation rules require either 'other_field' or 'value'.");
+  }
+  if (node["multiplier"]) {
+    rule.multiplier = node["multiplier"].as<uint64_t>();
+  }
+  if (node["if"]) {
+    auto condition = parse_condition(node["if"]);
+    if (!condition.ok()) {
+      return condition.status();
+    }
+    rule.when = std::move(condition).value();
+  }
+  return rule;
+}
+
 StatusOr<FieldDefinition> parse_field(const YAML::Node& node) {
   if (!node["name"] || !node["type"]) {
     return invalid_argument("Each field requires 'name' and 'type'.");
@@ -164,6 +256,9 @@ StatusOr<FieldDefinition> parse_field(const YAML::Node& node) {
 
   if (type_name == kTypeBytes) {
     field.kind = FieldKind::kBytes;
+  } else if (type_name == kTypeReserved) {
+    field.kind = FieldKind::kBytes;
+    field.is_reserved = true;
   } else if (type_name == kTypeString) {
     field.kind = FieldKind::kString;
     if (node["encoding"]) {
@@ -198,6 +293,17 @@ StatusOr<FieldDefinition> parse_field(const YAML::Node& node) {
       return invalid_argument("Enum fields require a 'values' mapping.");
     }
     field.enum_values = enum_values.value();
+  } else if (type_name == kTypeVariant) {
+    field.kind = FieldKind::kVariant;
+    if (!node["tag_from"]) {
+      return invalid_argument("Variant fields require 'tag_from'.");
+    }
+    field.tag_from_field = node["tag_from"].as<std::string>();
+    const auto cases = parse_variant_cases(node["cases"]);
+    if (!cases.ok()) {
+      return cases.status();
+    }
+    field.variant_cases = cases.value();
   } else if (type_name.starts_with(kTypeUnsignedPrefix)) {
     field.kind = FieldKind::kUnsigned;
     const auto width = parse_width_token(type_name, kTypeUnsignedPrefix);
@@ -243,6 +349,21 @@ StatusOr<FieldDefinition> parse_field(const YAML::Node& node) {
   if (node["size_from"]) {
     field.size_from_field = node["size_from"].as<std::string>();
   }
+  if (node["align"]) {
+    field.alignment = static_cast<size_t>(node["align"].as<uint64_t>());
+  }
+  if (node["reserved_fill"]) {
+    field.is_reserved = true;
+    field.reserved_fill_byte = static_cast<uint8_t>(node["reserved_fill"].as<uint32_t>());
+  }
+  if (node["count"]) {
+    field.fixed_count = static_cast<size_t>(node["count"].as<uint64_t>());
+    field.kind = FieldKind::kCollection;
+  }
+  if (node["count_from"]) {
+    field.count_from_field = node["count_from"].as<std::string>();
+    field.kind = FieldKind::kCollection;
+  }
   if (node["expect"]) {
     field.has_expected_unsigned = true;
     field.expected_unsigned = node["expect"].as<uint64_t>();
@@ -266,6 +387,20 @@ StatusOr<FieldDefinition> parse_field(const YAML::Node& node) {
       return checksum.status();
     }
     field.checksum = std::move(checksum).value();
+  }
+  if (node["if"]) {
+    auto condition = parse_condition(node["if"]);
+    if (!condition.ok()) {
+      return condition.status();
+    }
+    field.condition = std::move(condition).value();
+  }
+  if (node["present"]) {
+    auto presence = parse_presence(node["present"]);
+    if (!presence.ok()) {
+      return presence.status();
+    }
+    field.presence = std::move(presence).value();
   }
   return field;
 }
@@ -303,6 +438,19 @@ StatusOr<std::vector<Definition>> parse_layout_sequence(const YAML::Node& node,
         return field.status();
       }
       definition.fields.push_back(std::move(field).value());
+    }
+    if (layout_node["validations"]) {
+      if (!layout_node["validations"].IsSequence()) {
+        return invalid_argument("Layout validations must be declared as a sequence.");
+      }
+      definition.validations.reserve(layout_node["validations"].size());
+      for (const YAML::Node& validation_node : layout_node["validations"]) {
+        auto rule = parse_validation_rule(validation_node);
+        if (!rule.ok()) {
+          return rule.status();
+        }
+        definition.validations.push_back(std::move(rule).value());
+      }
     }
     definitions.push_back(std::move(definition));
   }
@@ -470,6 +618,8 @@ class UprLexer {
       case ':':
       case ',':
       case '@':
+      case '!':
+      case '*':
       case '=':
       case '<':
       case '>':
@@ -701,6 +851,15 @@ class UprParser {
       return current_error();
     }
     while (!match_punctuation("}")) {
+      if (match_identifier("validate")) {
+        auto validation = parse_validation_statement();
+        if (!validation.ok()) {
+          return validation.status();
+        }
+        definition.validations.push_back(std::move(validation).value());
+        consume_optional_separator();
+        continue;
+      }
       auto field = parse_field_definition();
       if (!field.ok()) {
         return field.status();
@@ -727,6 +886,15 @@ class UprParser {
     while (!match_punctuation("}")) {
       if (match_identifier("allow_trailing_bytes")) {
         definition.allow_trailing_bytes = true;
+        consume_optional_separator();
+        continue;
+      }
+      if (match_identifier("validate")) {
+        auto validation = parse_validation_statement();
+        if (!validation.ok()) {
+          return validation.status();
+        }
+        definition.validations.push_back(std::move(validation).value());
         consume_optional_separator();
         continue;
       }
@@ -774,6 +942,33 @@ class UprParser {
         field.checksum = std::move(checksum).value();
         continue;
       }
+      if (peek_is_identifier("if") && peek_punctuation_after_current("(")) {
+        advance();
+        auto condition = parse_condition_suffix();
+        if (!condition.ok()) {
+          return condition.status();
+        }
+        field.condition = std::move(condition).value();
+        continue;
+      }
+      if (peek_is_identifier("present") && peek_punctuation_after_current("(")) {
+        advance();
+        auto presence = parse_presence_suffix();
+        if (!presence.ok()) {
+          return presence.status();
+        }
+        field.presence = std::move(presence).value();
+        continue;
+      }
+      if (peek_is_identifier("align") && peek_punctuation_after_current("(")) {
+        advance();
+        auto alignment = parse_alignment_suffix();
+        if (!alignment.ok()) {
+          return alignment.status();
+        }
+        field.alignment = alignment.value();
+        continue;
+      }
       if (match_punctuation("{")) {
         if (field.kind == FieldKind::kEnum) {
           auto enum_values = parse_enum_body();
@@ -781,6 +976,12 @@ class UprParser {
             return enum_values.status();
           }
           field.enum_values = std::move(enum_values).value();
+        } else if (field.kind == FieldKind::kVariant) {
+          auto variant_cases = parse_variant_case_body();
+          if (!variant_cases.ok()) {
+            return variant_cases.status();
+          }
+          field.variant_cases = std::move(variant_cases).value();
         } else {
           auto bit_fields = parse_bit_field_body();
           if (!bit_fields.ok()) {
@@ -807,6 +1008,11 @@ class UprParser {
 
     if (type_name == kTypeBytes) {
       field->kind = FieldKind::kBytes;
+      return parse_optional_size_suffix(field);
+    }
+    if (type_name == kTypeReserved) {
+      field->kind = FieldKind::kBytes;
+      field->is_reserved = true;
       return parse_optional_size_suffix(field);
     }
     if (type_name == kTypeString) {
@@ -840,6 +1046,21 @@ class UprParser {
         field->byte_order = ByteOrder::kBigEndian;
       }
       if (!expect_punctuation(">", "Expected '>' after enum underlying type.")) {
+        return current_error();
+      }
+      return Status::ok_status();
+    }
+    if (type_name == kTypeVariant) {
+      field->kind = FieldKind::kVariant;
+      if (!expect_punctuation("(", "Expected '(' after variant.")) {
+        return current_error();
+      }
+      const auto tag_from = parse_name("variant tag field");
+      if (!tag_from.ok()) {
+        return tag_from.status();
+      }
+      field->tag_from_field = tag_from.value();
+      if (!expect_punctuation(")", "Expected ')' after variant tag field.")) {
         return current_error();
       }
       return Status::ok_status();
@@ -887,7 +1108,7 @@ class UprParser {
 
     field->kind = FieldKind::kStruct;
     field->referenced_type = token.text;
-    return Status::ok_status();
+    return parse_optional_count_suffix(field);
   }
 
   Status parse_optional_size_suffix(FieldDefinition* field) {
@@ -914,6 +1135,36 @@ class UprParser {
       return error("Expected a fixed size or field reference inside '[...]'.");
     }
     if (!expect_punctuation("]", "Expected ']' after field size.")) {
+      return current_error();
+    }
+    return Status::ok_status();
+  }
+
+  Status parse_optional_count_suffix(FieldDefinition* field) {
+    if (!match_punctuation("[")) {
+      return Status::ok_status();
+    }
+    const UprToken& token = peek();
+    field->kind = FieldKind::kCollection;
+    if (token.kind == UprTokenKind::KNumber) {
+      const auto count = parse_u64("collection count");
+      if (!count.ok()) {
+        return count.status();
+      }
+      if (count.value() > std::numeric_limits<size_t>::max()) {
+        return invalid_argument("Collection count is too large.");
+      }
+      field->fixed_count = static_cast<size_t>(count.value());
+    } else if (token.kind == UprTokenKind::KIdentifier || token.kind == UprTokenKind::KString) {
+      const auto count_from = parse_name("count_from field");
+      if (!count_from.ok()) {
+        return count_from.status();
+      }
+      field->count_from_field = count_from.value();
+    } else {
+      return error("Expected a fixed count or field reference inside '[...]'.");
+    }
+    if (!expect_punctuation("]", "Expected ']' after collection count.")) {
       return current_error();
     }
     return Status::ok_status();
@@ -1012,6 +1263,178 @@ class UprParser {
       return current_error();
     }
     return checksum;
+  }
+
+  StatusOr<ConditionDefinition> parse_condition_suffix() {
+    if (!expect_punctuation("(", "Expected '(' after if.")) {
+      return current_error();
+    }
+    const auto field_name = parse_name("condition field");
+    if (!field_name.ok()) {
+      return field_name.status();
+    }
+    if (!expect_punctuation("=", "Expected '==' in conditional field declaration.") ||
+        !expect_punctuation("=", "Expected '==' in conditional field declaration.")) {
+      return current_error();
+    }
+    const auto expected_value = parse_u64("conditional expected value");
+    if (!expected_value.ok()) {
+      return expected_value.status();
+    }
+    if (!expect_punctuation(")", "Expected ')' after conditional field declaration.")) {
+      return current_error();
+    }
+    return ConditionDefinition{
+        .field = field_name.value(),
+        .equals_unsigned = expected_value.value(),
+    };
+  }
+
+  StatusOr<PresenceDefinition> parse_presence_suffix() {
+    if (!expect_punctuation("(", "Expected '(' after present.")) {
+      return current_error();
+    }
+    const auto field_name = parse_name("presence field");
+    if (!field_name.ok()) {
+      return field_name.status();
+    }
+    if (!expect_punctuation(",", "Expected ',' after presence field.")) {
+      return current_error();
+    }
+    const auto bit_index = parse_u64("presence bit index");
+    if (!bit_index.ok()) {
+      return bit_index.status();
+    }
+    if (bit_index.value() > std::numeric_limits<uint8_t>::max()) {
+      return invalid_argument("Presence bit index must fit in 8 bits.");
+    }
+    if (!expect_punctuation(")", "Expected ')' after presence declaration.")) {
+      return current_error();
+    }
+    return PresenceDefinition{
+        .field = field_name.value(),
+        .bit_index = static_cast<uint8_t>(bit_index.value()),
+    };
+  }
+
+  StatusOr<size_t> parse_alignment_suffix() {
+    if (!expect_punctuation("(", "Expected '(' after align.")) {
+      return current_error();
+    }
+    const auto alignment = parse_u64("field alignment");
+    if (!alignment.ok()) {
+      return alignment.status();
+    }
+    if (!expect_punctuation(")", "Expected ')' after align declaration.")) {
+      return current_error();
+    }
+    if (alignment.value() > std::numeric_limits<size_t>::max()) {
+      return invalid_argument("Field alignment is too large.");
+    }
+    return static_cast<size_t>(alignment.value());
+  }
+
+  StatusOr<ValidationOperator> parse_validation_operator_tokens() {
+    if (match_punctuation("=")) {
+      if (!expect_punctuation("=", "Expected '==' in validation expression.")) {
+        return current_error();
+      }
+      return ValidationOperator::kEq;
+    }
+    if (match_punctuation("!")) {
+      if (!expect_punctuation("=", "Expected '!=' in validation expression.")) {
+        return current_error();
+      }
+      return ValidationOperator::kNe;
+    }
+    if (match_punctuation("<")) {
+      if (match_punctuation("=")) {
+        return ValidationOperator::kLe;
+      }
+      return ValidationOperator::kLt;
+    }
+    if (match_punctuation(">")) {
+      if (match_punctuation("=")) {
+        return ValidationOperator::kGe;
+      }
+      return ValidationOperator::kGt;
+    }
+    return error("Expected a validation comparison operator.");
+  }
+
+  StatusOr<ValidationRuleDefinition> parse_validation_statement() {
+    if (!expect_punctuation("(", "Expected '(' after validate.")) {
+      return current_error();
+    }
+    ValidationRuleDefinition rule;
+    const auto field_name = parse_name("validation field");
+    if (!field_name.ok()) {
+      return field_name.status();
+    }
+    rule.field = field_name.value();
+    const auto op = parse_validation_operator_tokens();
+    if (!op.ok()) {
+      return op.status();
+    }
+    rule.op = op.value();
+    if (peek().kind == UprTokenKind::KIdentifier || peek().kind == UprTokenKind::KString) {
+      const auto other_field = parse_name("validation comparison field");
+      if (!other_field.ok()) {
+        return other_field.status();
+      }
+      rule.compare_to_field = true;
+      rule.other_field = other_field.value();
+    } else {
+      const auto value = parse_u64("validation comparison value");
+      if (!value.ok()) {
+        return value.status();
+      }
+      rule.value = value.value();
+    }
+    if (match_punctuation("*")) {
+      const auto multiplier = parse_u64("validation multiplier");
+      if (!multiplier.ok()) {
+        return multiplier.status();
+      }
+      rule.multiplier = multiplier.value();
+    }
+    if (match_punctuation(",")) {
+      if (!match_identifier("if")) {
+        return error("Expected 'if' after validation comma.");
+      }
+      auto condition = parse_condition_suffix();
+      if (!condition.ok()) {
+        return condition.status();
+      }
+      rule.when = std::move(condition).value();
+    }
+    if (!expect_punctuation(")", "Expected ')' after validate declaration.")) {
+      return current_error();
+    }
+    return rule;
+  }
+
+  StatusOr<std::vector<VariantCaseDefinition>> parse_variant_case_body() {
+    std::vector<VariantCaseDefinition> cases;
+    while (!match_punctuation("}")) {
+      const auto tag_value = parse_u64("variant tag value");
+      if (!tag_value.ok()) {
+        return tag_value.status();
+      }
+      if (!expect_punctuation("=", "Expected '=' in variant case declaration.")) {
+        return current_error();
+      }
+      const auto referenced_type = parse_name("variant case struct");
+      if (!referenced_type.ok()) {
+        return referenced_type.status();
+      }
+      cases.push_back({
+          .tag_value = tag_value.value(),
+          .referenced_type = referenced_type.value(),
+      });
+      consume_optional_separator();
+    }
+    return cases;
   }
 
   StatusOr<uint64_t> parse_u64(std::string_view context) {

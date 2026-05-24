@@ -345,6 +345,76 @@ std::vector<std::byte> make_builtin_checksum_frame(uint8_t message_type, std::st
   return frame;
 }
 
+upr::CompiledProtocol make_advanced_decoder_protocol() {
+  upr::FieldDefinition note_length = upr_test_support::make_scalar_field("note_len", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_presence(&note_length, "presence", 0);
+
+  upr::FieldDefinition note =
+      upr_test_support::make_dynamic_string_field("note", "note_len", upr::StringEncoding::kUtf8);
+  upr_test_support::set_presence(&note, "presence", 0);
+
+  upr::FieldDefinition revision = upr_test_support::make_scalar_field("revision", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_condition(&revision, "kind", 2);
+
+  return upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "advanced_decoder",
+      {upr_test_support::make_message(
+          "Snapshot",
+          {upr_test_support::make_scalar_field(
+               "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 11),
+           upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("presence", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("level_count", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_collection_field("levels", "Level", "level_count"),
+           upr_test_support::make_variant_field("detail",
+                                                "kind",
+                                                {{.tag_value = 1, .referenced_type = "QuoteDetail"},
+                                                 {.tag_value = 2, .referenced_type = "TradeDetail"}}),
+           note_length,
+           note,
+           revision})},
+      {upr_test_support::make_struct("Level",
+                                     {upr_test_support::make_scalar_field("price", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("qty", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct("QuoteDetail",
+                                     {upr_test_support::make_scalar_field("best_bid", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("best_ask", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct(
+           "TradeDetail", {upr_test_support::make_scalar_field("trade_id", upr::FieldKind::kUnsigned, 4)})}));
+}
+
+std::vector<std::byte> make_snapshot_quote_frame() {
+  std::vector<std::byte> frame;
+  upr_test_support::append_integral<uint8_t>(frame, 11, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 1, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 1, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 2, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 101, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 7, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 102, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 8, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 99, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 103, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 3, upr::ByteOrder::kLittleEndian);
+  frame.push_back(std::byte{'A'});
+  frame.push_back(std::byte{'B'});
+  frame.push_back(std::byte{'C'});
+  return frame;
+}
+
+std::vector<std::byte> make_snapshot_trade_frame() {
+  std::vector<std::byte> frame;
+  upr_test_support::append_integral<uint8_t>(frame, 11, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 2, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 0, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 1, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 77, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint16_t>(frame, 9, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint32_t>(frame, 0x12345678U, upr::ByteOrder::kLittleEndian);
+  upr_test_support::append_integral<uint8_t>(frame, 7, upr::ByteOrder::kLittleEndian);
+  return frame;
+}
+
 struct InvalidUtf8Case {
   std::string name;
   std::vector<std::byte> frame;
@@ -544,6 +614,252 @@ TEST(ProtocolDecoderTest, SupportsDynamicBytesAndTrailingMessages) {
   EXPECT_EQ(trailing.get<uint8_t>("count"), 5U);
 }
 
+TEST(ProtocolDecoderTest, DecodesCollectionsVariantsPresenceAndConditionalFields) {
+  const upr::CompiledProtocol protocol = make_advanced_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+
+  upr::DecodedMessage quote_message;
+  const std::vector<std::byte> quote_frame = make_snapshot_quote_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(quote_frame.data(), quote_frame.size()), &quote_message),
+            upr::DecodeStatus::kOk);
+  EXPECT_EQ(quote_message.get_unsigned("kind"), 1U);
+  EXPECT_TRUE(quote_message.is_present("note_len"));
+  EXPECT_TRUE(quote_message.is_present("note"));
+  EXPECT_FALSE(quote_message.is_present("revision"));
+  ASSERT_TRUE(quote_message.get_string_view("note").has_value());
+  EXPECT_EQ(*quote_message.get_string_view("note"), "ABC");
+
+  const auto levels = quote_message.get_collection("levels");
+  ASSERT_TRUE(levels.has_value());
+  EXPECT_EQ(levels->count(), 2U);
+  const auto first_level = levels->at(0);
+  ASSERT_TRUE(first_level.has_value());
+  EXPECT_EQ(first_level->get_unsigned("price"), 101U);
+  EXPECT_EQ(first_level->get_unsigned("qty"), 7U);
+  const auto second_level = levels->at(1);
+  ASSERT_TRUE(second_level.has_value());
+  EXPECT_EQ(second_level->get_unsigned("price"), 102U);
+  EXPECT_EQ(second_level->get_unsigned("qty"), 8U);
+
+  const auto quote_detail = quote_message.get_variant("detail");
+  ASSERT_TRUE(quote_detail.has_value());
+  EXPECT_EQ(quote_detail->message_name(), "QuoteDetail");
+  EXPECT_EQ(quote_detail->get_unsigned("best_bid"), 99U);
+  EXPECT_EQ(quote_detail->get_unsigned("best_ask"), 103U);
+
+  upr::DecodedMessage trade_message;
+  const std::vector<std::byte> trade_frame = make_snapshot_trade_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(trade_frame.data(), trade_frame.size()), &trade_message),
+            upr::DecodeStatus::kOk);
+  EXPECT_FALSE(trade_message.is_present("note_len"));
+  EXPECT_FALSE(trade_message.is_present("note"));
+  EXPECT_TRUE(trade_message.is_present("revision"));
+  EXPECT_EQ(trade_message.get_unsigned("revision"), 7U);
+  const auto trade_detail = trade_message.get_variant("detail");
+  ASSERT_TRUE(trade_detail.has_value());
+  EXPECT_EQ(trade_detail->message_name(), "TradeDetail");
+  EXPECT_EQ(trade_detail->get_unsigned("trade_id"), 0x12345678U);
+}
+
+TEST(ProtocolDecoderTest, SupportsPartialDecodeFieldMasks) {
+  const upr::CompiledProtocol protocol = make_advanced_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  const upr::CompiledMessage* snapshot = protocol.find_message("Snapshot");
+  ASSERT_NE(snapshot, nullptr);
+
+  upr::DecodeFieldMask mask{};
+  mask.selected_fields.fill(false);
+  mask.selected_fields[*snapshot->find_field("kind")] = true;
+  mask.selected_fields[*snapshot->find_field("levels")] = true;
+  mask.selected_fields[*snapshot->find_field("detail")] = true;
+
+  upr::DecodedMessage message;
+  const std::vector<std::byte> frame = make_snapshot_quote_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(frame.data(), frame.size()), &message, mask),
+            upr::DecodeStatus::kOk);
+  EXPECT_EQ(message.get_unsigned("kind"), 1U);
+  EXPECT_FALSE(message.is_present("note"));
+  EXPECT_FALSE(message.get_unsigned("presence").has_value());
+  ASSERT_TRUE(message.get_collection("levels").has_value());
+  ASSERT_TRUE(message.get_variant("detail").has_value());
+}
+
+TEST(ProtocolDecoderTest, DecodesFramesWhenAlignedConditionalFieldIsAbsent) {
+  upr::FieldDefinition flags = upr_test_support::make_scalar_field("flags", upr::FieldKind::kUnsigned, 1);
+  upr::FieldDefinition optional_word =
+      upr_test_support::make_scalar_field("optional_word", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::set_presence(&optional_word, "flags", 0);
+  upr_test_support::set_alignment(&optional_word, 8);
+
+  const upr::CompiledProtocol protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "conditional_alignment_decoder",
+      {upr_test_support::make_message(
+          "Packet",
+          {flags, optional_word, upr_test_support::make_scalar_field("tail", upr::FieldKind::kUnsigned, 1)})}));
+
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage message;
+  const auto frame = upr_test_support::make_bytes({0x00, 0x7F});
+  ASSERT_EQ(decoder.decode_as("Packet", upr::ByteSpan(frame.data(), frame.size()), &message), upr::DecodeStatus::kOk);
+  EXPECT_EQ(message.get_unsigned("flags"), 0U);
+  EXPECT_FALSE(message.get_unsigned("optional_word").has_value());
+  EXPECT_EQ(message.get_unsigned("tail"), 0x7FU);
+}
+
+TEST(ProtocolDecoderTest, DecodesVariableLengthAndFixedCountCollections) {
+  const upr::CompiledProtocol protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "collection_shapes",
+      {upr_test_support::make_message("VariableItems",
+                                      {upr_test_support::make_scalar_field("item_count", upr::FieldKind::kUnsigned, 1),
+                                       upr_test_support::make_collection_field("items", "VariableItem", "item_count")}),
+       upr_test_support::make_message("FixedItems",
+                                      {upr_test_support::make_fixed_collection_field("items", "FixedItem", 2)})},
+      {upr_test_support::make_struct("VariableItem",
+                                     {upr_test_support::make_scalar_field("payload_len", upr::FieldKind::kUnsigned, 1),
+                                      upr_test_support::make_dynamic_bytes_field("payload", "payload_len")}),
+       upr_test_support::make_struct("FixedItem",
+                                     {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}));
+  upr::ProtocolDecoder decoder(protocol);
+
+  const std::vector<std::byte> variable_frame = upr_test_support::make_bytes({0x02, 0x02, 0xAA, 0xBB, 0x01, 0xCC});
+  upr::DecodedMessage variable_message;
+  ASSERT_EQ(decoder.decode_as(
+                "VariableItems", upr::ByteSpan(variable_frame.data(), variable_frame.size()), &variable_message),
+            upr::DecodeStatus::kOk);
+  const auto variable_items = variable_message.get_collection("items");
+  ASSERT_TRUE(variable_items.has_value());
+  EXPECT_EQ(variable_items->count(), 2U);
+  ASSERT_TRUE(variable_items->at(0).has_value());
+  ASSERT_TRUE(variable_items->at(1).has_value());
+  EXPECT_FALSE(variable_items->at(2).has_value());
+
+  const std::vector<std::byte> empty_variable_frame = upr_test_support::make_bytes({0x00});
+  upr::DecodedMessage empty_variable_message;
+  ASSERT_EQ(decoder.decode_as("VariableItems",
+                              upr::ByteSpan(empty_variable_frame.data(), empty_variable_frame.size()),
+                              &empty_variable_message),
+            upr::DecodeStatus::kOk);
+  ASSERT_TRUE(empty_variable_message.get_collection("items").has_value());
+  EXPECT_EQ(empty_variable_message.get_collection("items")->count(), 0U);
+
+  const std::vector<std::byte> fixed_frame = upr_test_support::make_bytes({0x10, 0x20});
+  upr::DecodedMessage fixed_message;
+  ASSERT_EQ(decoder.decode_as("FixedItems", upr::ByteSpan(fixed_frame.data(), fixed_frame.size()), &fixed_message),
+            upr::DecodeStatus::kOk);
+  const auto fixed_items = fixed_message.get_collection("items");
+  ASSERT_TRUE(fixed_items.has_value());
+  EXPECT_EQ(fixed_items->count(), 2U);
+  ASSERT_TRUE(fixed_items->at(1).has_value());
+}
+
+TEST(ProtocolDecoderTest, CollectionAndVariantAccessorsHandleWrongKindsAndHiddenFields) {
+  const upr::CompiledProtocol protocol = make_advanced_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+
+  upr::DecodedMessage message;
+  const std::vector<std::byte> frame = make_snapshot_quote_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(frame.data(), frame.size()), &message), upr::DecodeStatus::kOk);
+  EXPECT_FALSE(message.get_collection("kind").has_value());
+  EXPECT_FALSE(message.get_variant("levels").has_value());
+  EXPECT_FALSE(message.get_string_view("revision").has_value());
+
+  const upr::CompiledMessage* snapshot = protocol.find_message("Snapshot");
+  ASSERT_NE(snapshot, nullptr);
+  upr::DecodeFieldMask mask{};
+  mask.selected_fields.fill(false);
+  mask.selected_fields[*snapshot->find_field("kind")] = true;
+
+  upr::DecodedMessage masked_message;
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(frame.data(), frame.size()), &masked_message, mask),
+            upr::DecodeStatus::kOk);
+  EXPECT_FALSE(masked_message.get_collection("levels").has_value());
+  EXPECT_FALSE(masked_message.get_variant("detail").has_value());
+
+  const upr::CompiledProtocol base_protocol = make_decoder_protocol();
+  upr::ProtocolDecoder base_decoder(base_protocol);
+  const upr::CompiledMessage* blob = base_protocol.find_message("Blob");
+  ASSERT_NE(blob, nullptr);
+  upr::DecodeFieldMask blob_mask{};
+  blob_mask.selected_fields.fill(false);
+  blob_mask.selected_fields[*blob->find_field("length")] = true;
+  upr::DecodedMessage blob_message;
+  const std::vector<std::byte> blob_frame = make_blob_frame(3, {0xAA, 0xBB, 0xCC});
+  ASSERT_EQ(
+      base_decoder.decode_as("Blob", upr::ByteSpan(blob_frame.data(), blob_frame.size()), &blob_message, blob_mask),
+      upr::DecodeStatus::kOk);
+  EXPECT_FALSE(blob_message.get_bytes("payload").has_value());
+
+  upr::DecodedMessage trade_message;
+  const std::vector<std::byte> trade_frame = make_snapshot_trade_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(trade_frame.data(), trade_frame.size()), &trade_message),
+            upr::DecodeStatus::kOk);
+  EXPECT_FALSE(trade_message.get_string_view("note").has_value());
+}
+
+TEST(ProtocolDecoderTest, RejectsMalformedManualCollectionAndVariantLayouts) {
+  upr::CompiledMessage item_layout(
+      "Item",
+      {upr::CompiledField{.id = 0, .name = "value", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1}},
+      {},
+      {},
+      1,
+      false);
+
+  upr::CompiledField signed_count{.id = 0, .name = "count", .kind = upr::FieldKind::kSigned, .width_bytes = 1};
+  upr::CompiledField bad_collection{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .fixed_size = 0,
+      .struct_id = 0,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage missing_count_source("MissingCountSource", {signed_count, bad_collection}, {}, {}, 1, false);
+
+  upr::CompiledField tag{.id = 0, .name = "tag", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1};
+  upr::CompiledField bad_variant_tag{
+      .id = 1,
+      .name = "detail",
+      .kind = upr::FieldKind::kVariant,
+      .fixed_size = 0,
+      .tag_from_field = 0,
+      .variant_cases = {{.tag_value = 1, .struct_id = 0}},
+  };
+  upr::CompiledMessage missing_variant_case("MissingVariantCase", {tag, bad_variant_tag}, {}, {}, 1, false);
+
+  upr::CompiledField bad_variant_struct{
+      .id = 1,
+      .name = "detail",
+      .kind = upr::FieldKind::kVariant,
+      .fixed_size = 0,
+      .tag_from_field = 0,
+      .variant_cases = {{.tag_value = 1, .struct_id = 99}},
+  };
+  upr::CompiledMessage missing_variant_struct_layout(
+      "MissingVariantStructLayout", {tag, bad_variant_struct}, {}, {}, 1, false);
+
+  upr::CompiledProtocol protocol(
+      "manual", 5, {item_layout}, {missing_count_source, missing_variant_case, missing_variant_struct_layout});
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage decoded;
+
+  const std::vector<std::byte> count_frame = upr_test_support::make_bytes({0x01});
+  EXPECT_EQ(decoder.decode_as("MissingCountSource", upr::ByteSpan(count_frame.data(), count_frame.size()), &decoded),
+            upr::DecodeStatus::kInvalidData);
+
+  const std::vector<std::byte> missing_case_frame = upr_test_support::make_bytes({0x02});
+  EXPECT_EQ(decoder.decode_as(
+                "MissingVariantCase", upr::ByteSpan(missing_case_frame.data(), missing_case_frame.size()), &decoded),
+            upr::DecodeStatus::kInvalidData);
+
+  const std::vector<std::byte> missing_layout_frame = upr_test_support::make_bytes({0x01});
+  EXPECT_EQ(decoder.decode_as("MissingVariantStructLayout",
+                              upr::ByteSpan(missing_layout_frame.data(), missing_layout_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kInvalidData);
+}
+
 TEST(ProtocolDecoderTest, ReturnsNulloptForWrongKindsMissingNamesAndOverflow) {
   const upr::CompiledProtocol protocol = make_decoder_protocol();
   upr::ProtocolDecoder decoder(protocol);
@@ -584,6 +900,256 @@ TEST(ProtocolDecoderTest, ReturnsNulloptForWrongKindsMissingNamesAndOverflow) {
   EXPECT_FALSE(message.get_bit_signed("missing").has_value());
   EXPECT_FALSE(message.get_bit_enum_name("missing").has_value());
   EXPECT_FALSE(message.get_bit<uint8_t>("kind").has_value());
+}
+
+TEST(ProtocolDecoderTest, DefaultDecodedViewsReturnEmptyAccessors) {
+  upr::DecodedMessage message;
+  EXPECT_FALSE(message.valid());
+  EXPECT_TRUE(message.message_name().empty());
+  EXPECT_TRUE(message.raw().empty());
+  EXPECT_EQ(message.protocol(), nullptr);
+  EXPECT_EQ(message.schema(), nullptr);
+  EXPECT_FALSE(message.field_id("missing").has_value());
+  EXPECT_FALSE(message.bit_field_id("missing").has_value());
+  EXPECT_FALSE(message.is_present(0));
+  EXPECT_FALSE(message.is_present("missing"));
+  EXPECT_FALSE(message.get_unsigned(0).has_value());
+  EXPECT_FALSE(message.get_signed(0).has_value());
+  EXPECT_FALSE(message.get_float32(0).has_value());
+  EXPECT_FALSE(message.get_float64(0).has_value());
+  EXPECT_FALSE(message.get_bytes(0).has_value());
+  EXPECT_FALSE(message.get_string_view(0).has_value());
+  EXPECT_FALSE(message.get_enum_name(0).has_value());
+  EXPECT_FALSE(message.get_struct(0).has_value());
+  EXPECT_FALSE(message.get_collection(0).has_value());
+  EXPECT_FALSE(message.get_variant(0).has_value());
+  EXPECT_FALSE(message.get_bit_unsigned(0).has_value());
+  EXPECT_FALSE(message.get_bit_signed(0).has_value());
+  EXPECT_FALSE(message.get_bit_enum_name(0).has_value());
+  EXPECT_FALSE(message.get_fixed_bytes<1>(0).has_value());
+  EXPECT_FALSE(message.get_fixed_string<1>(0).has_value());
+  EXPECT_FALSE(message.get<uint8_t>(0).has_value());
+  EXPECT_FALSE(message.get_bit<uint8_t>(0).has_value());
+
+  upr::DecodedCollectionView collection;
+  EXPECT_FALSE(collection.valid());
+  EXPECT_EQ(collection.count(), 0U);
+  EXPECT_TRUE(collection.raw().empty());
+  EXPECT_FALSE(collection.at(0).has_value());
+}
+
+TEST(ProtocolDecoderTest, PartialDecodeCanHideVariantTagAndBitfieldContainers) {
+  const upr::CompiledProtocol protocol = make_advanced_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  const upr::CompiledMessage* snapshot = protocol.find_message("Snapshot");
+  ASSERT_NE(snapshot, nullptr);
+
+  upr::DecodeFieldMask mask{};
+  mask.selected_fields.fill(false);
+  mask.selected_fields[*snapshot->find_field("detail")] = true;
+
+  upr::DecodedMessage message;
+  const std::vector<std::byte> frame = make_snapshot_quote_frame();
+  ASSERT_EQ(decoder.decode_as("Snapshot", upr::ByteSpan(frame.data(), frame.size()), &message, mask),
+            upr::DecodeStatus::kOk);
+  ASSERT_TRUE(message.get_variant("detail").has_value());
+  EXPECT_EQ(message.get_variant("detail")->get_unsigned("best_bid"), 99U);
+
+  const upr::CompiledProtocol base_protocol = make_decoder_protocol();
+  upr::ProtocolDecoder base_decoder(base_protocol);
+  const upr::CompiledMessage* metrics = base_protocol.find_message("Metrics");
+  ASSERT_NE(metrics, nullptr);
+  upr::DecodeFieldMask bit_mask{};
+  bit_mask.selected_fields.fill(false);
+  bit_mask.selected_fields[*metrics->find_field("header")] = false;
+  bit_mask.selected_fields[*metrics->find_field("small_unsigned")] = true;
+
+  upr::DecodedMessage masked;
+  const std::vector<std::byte> metrics_frame = make_metrics_frame();
+  ASSERT_EQ(
+      base_decoder.decode_as("Metrics", upr::ByteSpan(metrics_frame.data(), metrics_frame.size()), &masked, bit_mask),
+      upr::DecodeStatus::kOk);
+  EXPECT_FALSE(masked.get_bit_unsigned("version").has_value());
+}
+
+TEST(ProtocolDecoderTest, ManualLayoutsCoverValidationChecksumAndNestedDecodeFailures) {
+  upr::CompiledField count{.id = 0, .name = "count", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1};
+  upr::CompiledField payload_len{.id = 0, .name = "payload_len", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1};
+  upr::CompiledField payload{
+      .id = 1,
+      .name = "payload",
+      .kind = upr::FieldKind::kBytes,
+      .fixed_size = 0,
+      .dynamic_size = true,
+      .size_from_field = 0,
+  };
+  upr::CompiledMessage variable_item("VariableItem", {payload_len, payload}, {}, {}, 1, false);
+
+  upr::CompiledField items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 0,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage collection_message("CollectionMessage", {count, items}, {}, {}, 1, false);
+
+  upr::CompiledField missing_items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 99,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage missing_collection_layout("MissingCollectionLayout", {count, missing_items}, {}, {}, 1, false);
+
+  upr::CompiledMessage variant_body(
+      "VariantBody",
+      {upr::CompiledField{.id = 0, .name = "value", .kind = upr::FieldKind::kUnsigned, .width_bytes = 2}},
+      {},
+      {},
+      2,
+      false);
+  upr::CompiledField tag{.id = 0, .name = "tag", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1};
+  upr::CompiledField variant{
+      .id = 1,
+      .name = "detail",
+      .kind = upr::FieldKind::kVariant,
+      .tag_from_field = 0,
+      .variant_cases = {{.tag_value = 1, .struct_id = 1}},
+  };
+  upr::CompiledMessage variant_message("VariantMessage", {tag, variant}, {}, {}, 1, false);
+
+  upr::CompiledField checksum_field{.id = 1, .name = "checksum", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1};
+  upr::CompiledChecksum checksum{
+      .field_id = 1,
+      .result_width_bytes = 1,
+      .function = nullptr,
+      .algorithm_name = "custom_missing",
+      .builtin_kind = upr::CompiledChecksum::BuiltinKind::kCustom,
+  };
+  upr::CompiledMessage checksum_message(
+      "ChecksumMessage",
+      {upr::CompiledField{.id = 0, .name = "value", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1},
+       checksum_field},
+      {},
+      {checksum},
+      2,
+      false);
+
+  upr::CompiledValidationRule skip_rule{
+      .field_id = 1,
+      .op = upr::CompiledValidationOperator::kEq,
+      .value = 1,
+      .has_when = true,
+      .when_field_id = 0,
+      .when_equals = 9,
+  };
+  upr::CompiledMessage skipped_validation(
+      "SkippedValidation",
+      {upr::CompiledField{.id = 0, .name = "when_field", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1},
+       upr::CompiledField{.id = 1, .name = "value", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1}},
+      {},
+      {},
+      {skip_rule},
+      2,
+      false);
+
+  upr::CompiledValidationRule missing_rhs_rule{
+      .field_id = 0,
+      .op = upr::CompiledValidationOperator::kEq,
+      .other_field_id = 1,
+      .compare_to_field = true,
+  };
+  upr::CompiledMessage invalid_validation(
+      "InvalidValidation",
+      {upr::CompiledField{.id = 0, .name = "left", .kind = upr::FieldKind::kUnsigned, .width_bytes = 1},
+       upr::CompiledField{.id = 1, .name = "right", .kind = upr::FieldKind::kBytes, .fixed_size = 1}},
+      {},
+      {},
+      {missing_rhs_rule},
+      2,
+      false);
+
+  upr::CompiledMessage zero_item("ZeroItem", {}, {}, {}, 0, true, false);
+  upr::CompiledMessage variable_zero_item("VariableZeroItem", {}, {}, {}, 0, false, false);
+  upr::CompiledField zero_items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 2,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage zero_collection_message("ZeroCollectionMessage", {count, zero_items}, {}, {}, 1, false);
+  upr::CompiledField zero_variable_items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 3,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage zero_variable_collection_message(
+      "ZeroVariableCollectionMessage", {count, zero_variable_items}, {}, {}, 1, false);
+
+  upr::CompiledProtocol protocol("manual_deep",
+                                 77,
+                                 {variable_item, variant_body, zero_item, variable_zero_item},
+                                 {collection_message,
+                                  missing_collection_layout,
+                                  variant_message,
+                                  checksum_message,
+                                  skipped_validation,
+                                  invalid_validation,
+                                  zero_collection_message,
+                                  zero_variable_collection_message});
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage decoded;
+
+  const auto bad_collection_frame = upr_test_support::make_bytes({0x01, 0x02, 0xAA});
+  EXPECT_EQ(decoder.decode_as(
+                "CollectionMessage", upr::ByteSpan(bad_collection_frame.data(), bad_collection_frame.size()), &decoded),
+            upr::DecodeStatus::kSchemaMismatch);
+
+  const auto missing_collection_frame = upr_test_support::make_bytes({0x01});
+  EXPECT_EQ(decoder.decode_as("MissingCollectionLayout",
+                              upr::ByteSpan(missing_collection_frame.data(), missing_collection_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kInvalidData);
+
+  const auto short_variant_frame = upr_test_support::make_bytes({0x01, 0xAA});
+  EXPECT_EQ(decoder.decode_as(
+                "VariantMessage", upr::ByteSpan(short_variant_frame.data(), short_variant_frame.size()), &decoded),
+            upr::DecodeStatus::kSchemaMismatch);
+
+  const auto checksum_frame = upr_test_support::make_bytes({0x10, 0x00});
+  EXPECT_EQ(decoder.decode_as("ChecksumMessage", upr::ByteSpan(checksum_frame.data(), checksum_frame.size()), &decoded),
+            upr::DecodeStatus::kInvalidData);
+
+  const auto skipped_validation_frame = upr_test_support::make_bytes({0x01, 0xFF});
+  EXPECT_EQ(decoder.decode_as("SkippedValidation",
+                              upr::ByteSpan(skipped_validation_frame.data(), skipped_validation_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kOk);
+
+  const auto invalid_validation_frame = upr_test_support::make_bytes({0x01, 0x02});
+  EXPECT_EQ(decoder.decode_as("InvalidValidation",
+                              upr::ByteSpan(invalid_validation_frame.data(), invalid_validation_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kInvalidData);
+
+  const auto zero_collection_frame = upr_test_support::make_bytes({0x03});
+  EXPECT_EQ(
+      decoder.decode_as(
+          "ZeroCollectionMessage", upr::ByteSpan(zero_collection_frame.data(), zero_collection_frame.size()), &decoded),
+      upr::DecodeStatus::kSchemaMismatch);
+  EXPECT_EQ(decoder.decode_as("ZeroVariableCollectionMessage",
+                              upr::ByteSpan(zero_collection_frame.data(), zero_collection_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kSchemaMismatch);
 }
 
 TEST(ProtocolDecoderTest, DecodesManualScalarWidthsAcrossLittleAndBigEndianLayouts) {
@@ -1066,6 +1632,90 @@ TEST(ProtocolDecoderTest, DefaultConstructedDecodedMessageIsEmpty) {
   EXPECT_FALSE(message.field_id("anything").has_value());
   EXPECT_FALSE(message.bit_field_id("anything").has_value());
   EXPECT_FALSE(message.protocol());
+}
+
+TEST(ProtocolDecoderTest, EnforcesReservedAlignmentValidationAndPlans) {
+  const auto protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "hardware",
+      {upr_test_support::make_message(
+          "Packet",
+          {
+              upr_test_support::make_scalar_field("version", upr::FieldKind::kUnsigned, 1),
+              [] {
+                auto field = upr_test_support::make_reserved_field("pad", 3, 0xAA);
+                upr_test_support::set_alignment(&field, 4);
+                return field;
+              }(),
+              upr_test_support::make_scalar_field("payload_len", upr::FieldKind::kUnsigned, 1),
+              upr_test_support::make_scalar_field("item_count", upr::FieldKind::kUnsigned, 1),
+          },
+          {[] {
+            auto rule = upr_test_support::make_validation_against_field(
+                "payload_len", upr::ValidationOperator::kEq, "item_count", 4);
+            upr_test_support::set_validation_condition(&rule, "version", 2);
+            return rule;
+          }()})}));
+
+  upr::ProtocolDecoder decoder(protocol);
+  auto plan = decoder.make_plan("Packet");
+  ASSERT_TRUE(plan.has_value());
+
+  const std::vector<std::byte> valid_frame =
+      upr_test_support::make_bytes({0x02, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0x04, 0x01});
+  upr::DecodedMessage message;
+  ASSERT_EQ(decoder.decode_with_plan(*plan, valid_frame, &message), upr::DecodeStatus::kOk);
+  EXPECT_EQ(message.get_unsigned("payload_len"), 4U);
+
+  const std::vector<std::byte> bad_reserved =
+      upr_test_support::make_bytes({0x02, 0x00, 0x00, 0x00, 0xAA, 0x00, 0xAA, 0x04, 0x01});
+  EXPECT_EQ(decoder.decode_as("Packet", bad_reserved, &message), upr::DecodeStatus::kSchemaMismatch);
+
+  const std::vector<std::byte> bad_validation =
+      upr_test_support::make_bytes({0x02, 0x00, 0x00, 0x00, 0xAA, 0xAA, 0xAA, 0x05, 0x01});
+  EXPECT_EQ(decoder.decode_as("Packet", bad_validation, &message), upr::DecodeStatus::kSchemaMismatch);
+}
+
+TEST(ProtocolDecoderTest, DecodePlanAndFieldMaskHelpersHandleUnknownAndMismatchedProtocols) {
+  const upr::CompiledProtocol protocol = make_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  EXPECT_FALSE(decoder.make_plan("Missing").has_value());
+
+  upr::DecodeFieldMask mask{};
+  mask.selected_fields.fill(false);
+  const auto masked_plan = decoder.make_plan("Blob", mask);
+  ASSERT_TRUE(masked_plan.has_value());
+
+  upr::DecodedMessage message;
+  const auto blob_frame = make_blob_frame(1, {0x42});
+  EXPECT_EQ(decoder.decode_with_plan(*masked_plan, blob_frame, &message), upr::DecodeStatus::kOk);
+  EXPECT_FALSE(message.get_unsigned("length").has_value());
+
+  const upr::CompiledProtocol other_protocol = make_builtin_checksum_protocol();
+  upr::ProtocolDecoder other_decoder(other_protocol);
+  const auto other_plan = other_decoder.make_plan("Sum16");
+  ASSERT_TRUE(other_plan.has_value());
+  EXPECT_EQ(decoder.decode_with_plan(*other_plan, blob_frame, &message), upr::DecodeStatus::kMessageNotFound);
+}
+
+TEST(ProtocolDecoderTest, OverloadsHandleCompiledLayoutsMasksAndDispatchMismatches) {
+  const upr::CompiledProtocol protocol = make_decoder_protocol();
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage message;
+
+  const upr::CompiledMessage* blob = protocol.find_message("Blob");
+  ASSERT_NE(blob, nullptr);
+  upr::DecodeFieldMask mask{};
+  mask.selected_fields.fill(false);
+  mask.selected_fields[0] = true;
+  ASSERT_EQ(decoder.decode_as(*blob, make_blob_frame(1, {0x7F}), &message, mask), upr::DecodeStatus::kOk);
+  EXPECT_TRUE(message.get_unsigned("message_type").has_value());
+  EXPECT_FALSE(message.get_unsigned("length").has_value());
+
+  const auto wrong_dispatch = make_blob_frame(1, {0x7F});
+  EXPECT_EQ(decoder.decode_as("Metrics", wrong_dispatch, &message), upr::DecodeStatus::kSchemaMismatch);
+
+  const auto unknown_masked = decoder.make_plan("Missing", mask);
+  EXPECT_FALSE(unknown_masked.has_value());
 }
 
 }  // namespace

@@ -1,6 +1,6 @@
 protocol market_data
 
-import "examples/order_types.upr"
+import "examples/schema/order_types.upr"
 
 message Order {
   message_type: uint8 = 1

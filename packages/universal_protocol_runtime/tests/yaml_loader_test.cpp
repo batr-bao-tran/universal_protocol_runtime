@@ -101,6 +101,243 @@ messages:
   EXPECT_EQ(definition.value().messages[0].fields[0].referenced_type, "Side");
 }
 
+TEST(YamlLoaderTest, ParsesCollectionsVariantsPresenceAndConditions) {
+  const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: market_data
+structs:
+  - name: Level
+    fields:
+      - name: price
+        type: uint16
+      - name: qty
+        type: uint16
+  - name: QuoteDetail
+    fields:
+      - name: best_bid
+        type: uint16
+      - name: best_ask
+        type: uint16
+  - name: TradeDetail
+    fields:
+      - name: trade_id
+        type: uint32
+messages:
+  - name: Snapshot
+    fields:
+      - name: kind
+        type: uint8
+      - name: presence
+        type: uint8
+      - name: level_count
+        type: uint8
+      - name: levels
+        type: Level
+        count_from: level_count
+      - name: detail
+        type: variant
+        tag_from: kind
+        cases:
+          1: QuoteDetail
+          2: TradeDetail
+      - name: note_len
+        type: uint8
+        present:
+          field: presence
+          bit: 0
+      - name: note
+        type: utf8
+        size_from: note_len
+        present:
+          field: presence
+          bit: 0
+      - name: revision
+        type: uint8
+        if:
+          field: kind
+          equals: 2
+)yaml");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  const upr::MessageDefinition& snapshot = definition.value().messages.front();
+  ASSERT_EQ(snapshot.fields.size(), 8U);
+  EXPECT_EQ(snapshot.fields[3].kind, upr::FieldKind::kCollection);
+  EXPECT_EQ(snapshot.fields[3].count_from_field, "level_count");
+  EXPECT_EQ(snapshot.fields[4].kind, upr::FieldKind::kVariant);
+  EXPECT_EQ(snapshot.fields[4].tag_from_field, "kind");
+  ASSERT_EQ(snapshot.fields[4].variant_cases.size(), 2U);
+  ASSERT_TRUE(snapshot.fields[5].presence.has_value());
+  EXPECT_EQ(snapshot.fields[5].presence->field, "presence");
+  ASSERT_TRUE(snapshot.fields[7].condition.has_value());
+  EXPECT_EQ(snapshot.fields[7].condition->equals_unsigned, 2U);
+}
+
+TEST(YamlLoaderTest, ParsesFixedCountCollections) {
+  const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: sensors
+structs:
+  - name: Reading
+    fields:
+      - name: value
+        type: uint16
+messages:
+  - name: Packet
+    fields:
+      - name: readings
+        type: Reading
+        count: 3
+)yaml");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  ASSERT_EQ(definition.value().messages[0].fields.size(), 1U);
+  const upr::FieldDefinition& field = definition.value().messages[0].fields[0];
+  EXPECT_EQ(field.kind, upr::FieldKind::kCollection);
+  EXPECT_EQ(field.fixed_count, 3U);
+  EXPECT_TRUE(field.count_from_field.empty());
+}
+
+TEST(YamlLoaderTest, ParsesTopLevelEnumByteOrderSuffixAndOverride) {
+  const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: market_data
+enums:
+  - name: Sequence
+    underlying: uint16_be
+    endianness: little
+    values:
+      1: One
+messages:
+  - name: Packet
+    fields:
+      - name: sequence
+        type: Sequence
+)yaml");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().enums.size(), 1U);
+  EXPECT_EQ(definition.value().enums[0].byte_order, upr::ByteOrder::kLittleEndian);
+}
+
+TEST(YamlLoaderTest, RejectsInvalidAdvancedFieldDeclarations) {
+  struct Case {
+    const char* yaml;
+    const char* expected_message_substring;
+  };
+
+  const std::vector<Case> cases = {
+      {
+          .yaml = R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: maybe_revision
+        type: uint8
+        if:
+          field: kind
+)yaml",
+          .expected_message_substring = "Conditional fields require 'field' and 'equals'",
+      },
+      {
+          .yaml = R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: maybe_note
+        type: uint8
+        present:
+          field: flags
+)yaml",
+          .expected_message_substring = "Presence-gated fields require 'field' and 'bit'",
+      },
+      {
+          .yaml = R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: detail
+        type: variant
+        cases:
+          1: QuoteDetail
+)yaml",
+          .expected_message_substring = "Variant fields require 'tag_from'",
+      },
+      {
+          .yaml = R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: detail
+        type: variant
+        tag_from: kind
+        cases:
+          - QuoteDetail
+)yaml",
+          .expected_message_substring = "Variant cases require a mapping",
+      },
+  };
+
+  for (const Case& test_case : cases) {
+    const auto definition = upr::load_protocol_definition_from_yaml(test_case.yaml);
+    ASSERT_FALSE(definition.ok());
+    EXPECT_NE(std::string(definition.status().message()).find(test_case.expected_message_substring), std::string::npos);
+  }
+}
+
+TEST(YamlLoaderTest, RejectsInvalidValidationOperatorAndLayoutValidationShapes) {
+  {
+    const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: left
+        type: uint8
+    validations:
+      field: left
+)yaml");
+    ASSERT_FALSE(definition.ok());
+    EXPECT_NE(std::string(definition.status().message()).find("Layout validations must be declared as a sequence"),
+              std::string::npos);
+  }
+
+  {
+    const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: left
+        type: uint8
+    validations:
+      - field: left
+        op: approx
+        value: 1
+)yaml");
+    ASSERT_FALSE(definition.ok());
+    EXPECT_NE(std::string(definition.status().message()).find("Unsupported validation operator: approx"),
+              std::string::npos);
+  }
+
+  {
+    const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: broken
+messages:
+  - name: Packet
+    fields:
+      - name: left
+        type: uint8
+    validations:
+      - field: left
+        op: ge
+)yaml");
+    ASSERT_FALSE(definition.ok());
+    EXPECT_NE(std::string(definition.status().message()).find("either 'other_field' or 'value'"), std::string::npos);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(Coverage,
                          ValidYamlLoaderTest,
                          ::testing::Values(
@@ -887,6 +1124,49 @@ TEST(YamlLoaderTest, ReturnsSchemaErrorForMalformedYaml) {
 
   ASSERT_FALSE(definition.ok());
   EXPECT_EQ(definition.status().code(), upr::StatusCode::kSchemaError);
+}
+
+TEST(YamlLoaderTest, ParsesReservedAlignedFieldsAndValidations) {
+  const auto definition = upr::load_protocol_definition_from_yaml(R"yaml(
+protocol: hardware
+messages:
+  - name: Packet
+    fields:
+      - name: version
+        type: uint8
+      - name: pad
+        type: reserved
+        size: 3
+        align: 4
+        reserved_fill: 170
+      - name: payload_len
+        type: uint8
+      - name: item_count
+        type: uint8
+    validations:
+      - field: payload_len
+        op: eq
+        other_field: item_count
+        multiplier: 4
+        if:
+          field: version
+          equals: 2
+)yaml");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  const auto& message = definition.value().messages.front();
+  ASSERT_EQ(message.fields.size(), 4U);
+  EXPECT_EQ(message.fields[1].kind, upr::FieldKind::kBytes);
+  EXPECT_TRUE(message.fields[1].is_reserved);
+  EXPECT_EQ(message.fields[1].alignment, 4U);
+  EXPECT_EQ(message.fields[1].reserved_fill_byte, 170U);
+  ASSERT_EQ(message.validations.size(), 1U);
+  EXPECT_EQ(message.validations[0].field, "payload_len");
+  EXPECT_TRUE(message.validations[0].compare_to_field);
+  EXPECT_EQ(message.validations[0].other_field, "item_count");
+  EXPECT_EQ(message.validations[0].multiplier, 4U);
+  ASSERT_TRUE(message.validations[0].when.has_value());
+  EXPECT_EQ(message.validations[0].when->field, "version");
 }
 
 #ifdef __GNUC__

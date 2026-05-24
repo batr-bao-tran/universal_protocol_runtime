@@ -125,6 +125,15 @@ TEST(WriteUnsignedScalarRuntimeTest, ReturnsFalseForWidthNine) {
   EXPECT_FALSE(enc::write_unsigned_scalar<upr::ByteOrder::kLittleEndian>(upr::MutableByteSpan(buf.data(), 9), 1ULL));
 }
 
+TEST(WriteUnsignedScalarRuntimeUncheckedTest, DispatchesIntermediateWidthsBigEndian) {
+  for (std::size_t width : {3U, 5U, 6U, 7U}) {
+    std::array<std::byte, 8> buf{};
+    enc::write_unsigned_scalar_unchecked<upr::ByteOrder::kBigEndian>(upr::MutableByteSpan(buf.data(), width),
+                                                                     0x0102030405060708ULL);
+    EXPECT_EQ(buf[width - 1], std::byte{0x08});
+  }
+}
+
 TEST(WriteUnsignedScalarFullRuntimeTest, LittleEndian) {
   std::array<std::byte, 2> buf{};
   EXPECT_TRUE(enc::write_unsigned_scalar(buf, 0x0102U, upr::ByteOrder::kLittleEndian));
@@ -174,6 +183,19 @@ TEST(WriteFloat32Test, RuntimeDispatch) {
   EXPECT_EQ(recovered, val);
 }
 
+TEST(WriteFloat32Test, RuntimeDispatchBigEndian) {
+  std::array<std::byte, 4> buf{};
+  const float val = -7.25F;
+  EXPECT_TRUE(enc::write_float32(buf, val, upr::ByteOrder::kBigEndian));
+  std::array<std::byte, 4> flipped{};
+  for (std::size_t i = 0; i < 4; ++i) {
+    flipped[i] = buf[3 - i];
+  }
+  float recovered = 0.0F;
+  std::memcpy(&recovered, flipped.data(), sizeof(recovered));
+  EXPECT_EQ(recovered, val);
+}
+
 TEST(WriteFloat64Test, RoundTripsLE) {
   std::array<std::byte, 8> buf{};
   const double original = std::numbers::e;
@@ -210,6 +232,15 @@ TEST(WriteFloat64Test, RuntimeDispatch) {
   }
   double recovered = 0.0;
   std::memcpy(&recovered, flipped.data(), sizeof(recovered));
+  EXPECT_EQ(recovered, val);
+}
+
+TEST(WriteFloat64Test, RuntimeDispatchLittleEndian) {
+  std::array<std::byte, 8> buf{};
+  const double val = -1234.5;
+  EXPECT_TRUE(enc::write_float64(buf, val, upr::ByteOrder::kLittleEndian));
+  double recovered = 0.0;
+  std::memcpy(&recovered, buf.data(), sizeof(recovered));
   EXPECT_EQ(recovered, val);
 }
 

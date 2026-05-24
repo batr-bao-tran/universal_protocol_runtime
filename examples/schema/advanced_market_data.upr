@@ -1,0 +1,37 @@
+protocol advanced_market_data
+
+struct Level {
+  price: uint16
+  qty: uint16
+}
+
+struct QuoteDetail {
+  best_bid: uint16
+  best_ask: uint16
+}
+
+struct TradeDetail {
+  trade_id: uint64
+}
+
+message Snapshot {
+  message_type: uint8 = 1
+  level_count: uint8
+  levels: Level[level_count]
+}
+
+message Event {
+  message_type: uint8 = 2
+  kind: uint8
+  detail: variant(kind) {
+    1 = QuoteDetail,
+    2 = TradeDetail
+  }
+}
+
+message Quote {
+  message_type: uint8 = 3
+  presence: uint8
+  note_len: uint8 present(presence, 0)
+  note: utf8[note_len] present(presence, 0)
+}

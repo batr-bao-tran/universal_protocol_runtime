@@ -119,6 +119,85 @@ upr::ProtocolDefinition make_numeric_codegen_definition() {
       });
 }
 
+upr::ProtocolDefinition make_advanced_codegen_definition() {
+  upr::FieldDefinition note_length = upr_test_support::make_scalar_field("note_len", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_presence(&note_length, "presence", 0);
+
+  upr::FieldDefinition note =
+      upr_test_support::make_dynamic_string_field("note", "note_len", upr::StringEncoding::kUtf8);
+  upr_test_support::set_presence(&note, "presence", 0);
+
+  upr::FieldDefinition revision = upr_test_support::make_scalar_field("revision", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_condition(&revision, "kind", 2);
+
+  return upr_test_support::make_protocol(
+      "advanced_codegen",
+      {upr_test_support::make_message(
+          "Snapshot",
+          {upr_test_support::make_scalar_field(
+               "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 11),
+           upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("presence", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_scalar_field("level_count", upr::FieldKind::kUnsigned, 1),
+           upr_test_support::make_collection_field("levels", "Level", "level_count"),
+           upr_test_support::make_variant_field("detail",
+                                                "kind",
+                                                {{.tag_value = 1, .referenced_type = "QuoteDetail"},
+                                                 {.tag_value = 2, .referenced_type = "TradeDetail"}}),
+           note_length,
+           note,
+           revision})},
+      {upr_test_support::make_struct("Level",
+                                     {upr_test_support::make_scalar_field("price", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("qty", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct("QuoteDetail",
+                                     {upr_test_support::make_scalar_field("best_bid", upr::FieldKind::kUnsigned, 2),
+                                      upr_test_support::make_scalar_field("best_ask", upr::FieldKind::kUnsigned, 2)}),
+       upr_test_support::make_struct("TradeDetail",
+                                     {upr_test_support::make_scalar_field("trade_id", upr::FieldKind::kUnsigned, 4)})});
+}
+
+upr::ProtocolDefinition make_checksum_codegen_definition() {
+  upr::FieldDefinition sum16 = upr_test_support::make_scalar_field("sum16", upr::FieldKind::kUnsigned, 2);
+  upr_test_support::add_checksum(&sum16, "sum16");
+
+  upr::FieldDefinition crc16 = upr_test_support::make_scalar_field("crc16", upr::FieldKind::kUnsigned, 2);
+  upr_test_support::add_checksum(&crc16, "crc16_ccitt");
+
+  upr::FieldDefinition crc32 = upr_test_support::make_scalar_field("crc32", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::add_checksum(&crc32, "crc32");
+
+  upr::FieldDefinition crc32c = upr_test_support::make_scalar_field("crc32c", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::add_checksum(&crc32c, "crc32c");
+
+  return upr_test_support::make_protocol(
+      "checksum_codegen",
+      {upr_test_support::make_message(
+           "Checksummed",
+           {upr_test_support::make_scalar_field(
+                "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 7),
+            upr_test_support::make_scalar_field("payload", upr::FieldKind::kUnsigned, 1),
+            sum16}),
+       upr_test_support::make_message(
+           "Crc16Message",
+           {upr_test_support::make_scalar_field(
+                "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 8),
+            upr_test_support::make_scalar_field("payload", upr::FieldKind::kUnsigned, 1),
+            crc16}),
+       upr_test_support::make_message(
+           "Crc32Message",
+           {upr_test_support::make_scalar_field(
+                "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 9),
+            upr_test_support::make_scalar_field("payload", upr::FieldKind::kUnsigned, 1),
+            crc32}),
+       upr_test_support::make_message(
+           "Crc32cMessage",
+           {upr_test_support::make_scalar_field(
+                "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 10),
+            upr_test_support::make_scalar_field("payload", upr::FieldKind::kUnsigned, 1),
+            crc32c})});
+}
+
 TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
 
@@ -338,6 +417,47 @@ TEST(BindingsGeneratorTest, GeneratesTypedBindingsForDigitPrefixedNamesStructsAn
 
   EXPECT_NE(python_generated.value().find("class N123Snapshot:"), std::string::npos);
   EXPECT_NE(python_generated.value().find("N_4_RAW_BYTES = 2"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, GeneratesBindingsForCollectionsVariantsAndConditionalFields) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_advanced_codegen_definition());
+
+  upr::StatusOr<std::string> cpp_generated = upr::generate_cpp_bindings_header(compiled);
+  upr::StatusOr<std::string> python_generated = upr::generate_python_bindings_module(compiled);
+
+  ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
+  ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
+
+  EXPECT_NE(cpp_generated.value().find("FieldKind::kCollection"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("FieldKind::kVariant"), std::string::npos);
+  EXPECT_NE(
+      cpp_generated.value().find("std::optional<universal_protocol_runtime::DecodedCollectionView> levels() const"),
+      std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("std::optional<universal_protocol_runtime::DecodedMessage> detail() const"),
+            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("universal_protocol_runtime::DecodedCollectionView levels;"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("const auto levels_value = source_message->get_collection(Fields::kLevels);"),
+            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("const auto detail_value = source_message->get_variant(Fields::kDetail);"),
+            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = false;"), std::string::npos);
+  EXPECT_NE(python_generated.value().find("kind=\"collection\""), std::string::npos);
+  EXPECT_NE(python_generated.value().find("kind=\"variant\""), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, GeneratesChecksumHelpersForBuiltInAlgorithms) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_checksum_codegen_definition());
+
+  const auto cpp_generated = upr::generate_cpp_bindings_header(compiled);
+
+  ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
+  EXPECT_NE(cpp_generated.value().find("runtime_checksum_sum16"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("runtime_checksum_crc16_ccitt"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("runtime_checksum_crc32"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("runtime_checksum_crc32c"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("checksum_sum16_fixed<"), std::string::npos);
 }
 
 }  // namespace

@@ -7,7 +7,7 @@ It provides:
 - syntax highlighting
 - comment support
 - bracket pairing
-- basic authoring snippets
+- authoring snippets for collections, variants, presence maps, checksums, and validations
 - a built-in language server for diagnostics, go-to-definition, hover, and completion
 
 ## Activate
@@ -30,5 +30,11 @@ node server/upr_language_server.js
 
 - named enums
 - named structs
-- field references used in variable-length fields
+- repeating groups with fixed or field-driven counts
+- tagged variants with `variant(tag_field)` cases
+- presence-gated optionals with `present(field, bit)`
+- conditional fields with `if(field == value)`
+- reserved fields with `reserved[n] align(m)`
+- layout validations with `validate(...)`
+- field references used in variable-length fields and collections
 - checksum algorithms and checksum anchors

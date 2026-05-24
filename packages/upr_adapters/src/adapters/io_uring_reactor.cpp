@@ -50,6 +50,29 @@ bool is_kernel_io_uring_supported() {
   return true;
 }
 
+struct IoUringAvailabilitySnapshot {
+  IoUringAvailability availability;
+  std::string_view reason;
+};
+
+IoUringAvailabilitySnapshot detect_io_uring_availability() {
+  if (is_kernel_io_uring_supported()) {
+    return {
+        .availability = IoUringAvailability::kAvailable,
+        .reason = "io_uring is available.",
+    };
+  }
+  return {
+      .availability = IoUringAvailability::kUnavailable,
+      .reason = "io_uring is unavailable on this kernel or process.",
+  };
+}
+
+const IoUringAvailabilitySnapshot& cached_io_uring_availability() {
+  static const IoUringAvailabilitySnapshot kSnapshot = detect_io_uring_availability();
+  return kSnapshot;
+}
+
 __kernel_timespec make_timeout(int timeout_ms) {
   return {
       .tv_sec = timeout_ms / 1000,
@@ -85,15 +108,13 @@ struct IoUringStreamEngine::Impl {
   uint64_t next_user_data = 1;
 };
 
-IoUringAvailability IoUringReactor::availability() {
-  return is_supported() ? IoUringAvailability::kAvailable : IoUringAvailability::kUnavailable;
+IoUringAvailability IoUringReactor::availability() { return cached_io_uring_availability().availability; }
+
+bool IoUringReactor::is_supported() {
+  return cached_io_uring_availability().availability == IoUringAvailability::kAvailable;
 }
 
-bool IoUringReactor::is_supported() { return is_kernel_io_uring_supported(); }
-
-std::string_view IoUringReactor::reason() {
-  return is_supported() ? "io_uring is available." : "io_uring is unavailable on this kernel or process.";
-}
+std::string_view IoUringReactor::reason() { return cached_io_uring_availability().reason; }
 
 IoUringStreamEngine::IoUringStreamEngine(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
@@ -335,7 +356,7 @@ StatusOr<bool> IoUringStreamEngine::wait_until_readable(int timeout_ms) const {
     }
     if (completion.user_data == timeout_tag) {
       saw_timeout = true;
-      if (completion.result != -ECANCELED && completion.result != -ETIME) {
+      if (completion.result != -ECANCELED && completion.result != -ETIME && completion.result != -ENOENT) {
         return status_from_uring_errno("link_timeout(POLLIN)", completion.result);
       }
       continue;
@@ -397,7 +418,7 @@ StatusOr<bool> IoUringStreamEngine::wait_until_writable(int timeout_ms) const {
     }
     if (completion.user_data == timeout_tag) {
       saw_timeout = true;
-      if (completion.result != -ECANCELED && completion.result != -ETIME) {
+      if (completion.result != -ECANCELED && completion.result != -ETIME && completion.result != -ENOENT) {
         return status_from_uring_errno("link_timeout(POLLOUT)", completion.result);
       }
       continue;

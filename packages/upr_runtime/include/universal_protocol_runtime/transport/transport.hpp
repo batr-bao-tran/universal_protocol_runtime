@@ -7,6 +7,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Result of one transport read attempt.
+ */
 struct ReadResult {
   size_t bytes_read = 0;
   bool end_of_stream = false;
@@ -14,16 +17,28 @@ struct ReadResult {
   Status status = Status::ok_status();
 };
 
+/**
+ * @brief Abstract byte transport used by stream runtimes and adapters.
+ */
 class ITransport {
  public:
+  /**
+   * @brief Destroys the transport interface.
+   * @return No return value.
+   */
   virtual ~ITransport() noexcept = default;
 
-  // Reads into the supplied buffer and reports whether progress was made,
-  // whether the source would block, or whether the stream reached EOF.
-  // A non-blocking transport should set would_block instead of returning
-  // repeated zero-byte reads that are expected to become readable later.
+  /**
+   * @brief Reads bytes into the supplied buffer.
+   * @param destination Writable destination span.
+   * @return Read result describing progress, blocking, EOF, or error state.
+   */
   virtual ReadResult read(MutableByteSpan destination) = 0;
 
+  /**
+   * @brief Reports whether the transport is still open.
+   * @return `true` when the transport can still be used.
+   */
   virtual bool is_open() const = 0;
 };
 

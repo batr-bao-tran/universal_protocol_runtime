@@ -26,12 +26,12 @@ struct OrderSpec {
 
 std::filesystem::path default_schema_path() {
   if (const char* runfiles_dir = std::getenv("RUNFILES_DIR")) {
-    return std::filesystem::path(runfiles_dir) / "_main" / "examples" / "market_data.upr";
+    return std::filesystem::path(runfiles_dir) / "_main" / "examples" / "schema" / "market_data.upr";
   }
   if (const char* test_srcdir = std::getenv("TEST_SRCDIR")) {
-    return std::filesystem::path(test_srcdir) / "_main" / "examples" / "market_data.upr";
+    return std::filesystem::path(test_srcdir) / "_main" / "examples" / "schema" / "market_data.upr";
   }
-  return std::filesystem::path("examples") / "market_data.upr";
+  return std::filesystem::path("examples") / "schema" / "market_data.upr";
 }
 
 std::filesystem::path default_workbench_path() { return std::filesystem::path("upr_demo_workbench.html"); }

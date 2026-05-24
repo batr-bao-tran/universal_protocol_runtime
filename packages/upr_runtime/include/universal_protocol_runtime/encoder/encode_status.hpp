@@ -5,6 +5,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Result codes returned by runtime encode operations.
+ */
 enum class EncodeStatus {
   kOk,
   kBufferTooSmall,
@@ -13,6 +16,11 @@ enum class EncodeStatus {
   kFieldLimitExceeded,
 };
 
+/**
+ * @brief Converts an encode status to a stable string name.
+ * @param status Status value to stringify.
+ * @return String representation of the status.
+ */
 constexpr std::string_view to_string(EncodeStatus status) noexcept {
   switch (status) {
     case EncodeStatus::kOk:

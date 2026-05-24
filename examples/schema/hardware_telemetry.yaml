@@ -1,0 +1,28 @@
+protocol: hardware_telemetry
+messages:
+  - name: SensorPacket
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 16
+      - name: version
+        type: uint8
+      - name: pad
+        type: reserved
+        size: 2
+        align: 4
+      - name: sample_bytes_len
+        type: uint16
+      - name: sample_count
+        type: uint8
+      - name: sample_bytes
+        type: bytes
+        size_from: sample_bytes_len
+    validations:
+      - field: sample_bytes_len
+        op: eq
+        other_field: sample_count
+        multiplier: 4
+        if:
+          field: version
+          equals: 2

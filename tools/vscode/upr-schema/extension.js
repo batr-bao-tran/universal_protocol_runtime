@@ -190,6 +190,7 @@ function buildSemanticTokens(document) {
   const legend = new vscode.SemanticTokensLegend(["uprMessage", "uprEnum", "uprField"], []);
   const builder = new vscode.SemanticTokensBuilder(legend);
   const enumNames = new Set();
+  const structNames = new Set();
   const lines = document.getText().split(/\r?\n/);
 
   for (let lineIndex = 0; lineIndex < lines.length; ++lineIndex) {
@@ -208,6 +209,14 @@ function buildSemanticTokens(document) {
       const start = line.indexOf(name);
       builder.push(lineIndex, start, name.length, 0, 0);
     }
+
+    const structMatch = line.match(/^(\s*struct\s+)([A-Za-z_][A-Za-z0-9_.-]*)/);
+    if (structMatch) {
+      const name = structMatch[2];
+      const start = line.indexOf(name);
+      structNames.add(name);
+      builder.push(lineIndex, start, name.length, 0, 0);
+    }
   }
 
   const blockStack = [];
@@ -216,22 +225,25 @@ function buildSemanticTokens(document) {
     const trimmed = line.trim();
     const opensEnum = /^\s*enum\s+[A-Za-z_][A-Za-z0-9_.-]*/.test(line);
     const opensMessage = /^\s*message\s+[A-Za-z_][A-Za-z0-9_.-]*/.test(line);
+    const opensStruct = /^\s*struct\s+[A-Za-z_][A-Za-z0-9_.-]*/.test(line);
 
     if (opensEnum && line.includes("{")) {
       blockStack.push("enum");
     } else if (opensMessage && line.includes("{")) {
       blockStack.push("message");
+    } else if (opensStruct && line.includes("{")) {
+      blockStack.push("struct");
     }
 
     const currentBlock = blockStack.length > 0 ? blockStack[blockStack.length - 1] : null;
     const fieldMatch = line.match(/^(\s*)([A-Za-z_][A-Za-z0-9_.-]*)(\s*:)/);
-    if (currentBlock === "message" && fieldMatch) {
+    if ((currentBlock === "message" || currentBlock === "struct") && fieldMatch) {
       const name = fieldMatch[2];
       const start = line.indexOf(name);
       builder.push(lineIndex, start, name.length, 2, 0);
 
       const typeMatch = line.match(/:\s*([A-Za-z_][A-Za-z0-9_.-]*)/);
-      if (typeMatch && enumNames.has(typeMatch[1])) {
+      if (typeMatch && (enumNames.has(typeMatch[1]) || structNames.has(typeMatch[1]))) {
         const typeName = typeMatch[1];
         const typeStart = line.indexOf(typeName, start + name.length);
         if (typeStart >= 0) {
@@ -251,7 +263,7 @@ function buildSemanticTokens(document) {
 
     for (const character of line) {
       if (character === "{") {
-        if (!opensEnum && !opensMessage) {
+        if (!opensEnum && !opensMessage && !opensStruct) {
           blockStack.push(currentBlock);
         }
       } else if (character === "}") {
@@ -261,8 +273,8 @@ function buildSemanticTokens(document) {
       }
     }
 
-    if ((opensEnum || opensMessage) && !line.includes("{") && trimmed.endsWith("{")) {
-      blockStack.push(opensEnum ? "enum" : "message");
+    if ((opensEnum || opensMessage || opensStruct) && !line.includes("{") && trimmed.endsWith("{")) {
+      blockStack.push(opensEnum ? "enum" : (opensMessage ? "message" : "struct"));
     }
   }
 

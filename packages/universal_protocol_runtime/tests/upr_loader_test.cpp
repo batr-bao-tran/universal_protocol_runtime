@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "universal_protocol_runtime/compiler/schema_compiler.hpp"
 #include "universal_protocol_runtime/pdl/yaml_loader.hpp"
@@ -73,6 +74,204 @@ message Order {
   EXPECT_EQ(order->fields()[0].kind, upr::FieldKind::kEnum);
   ASSERT_EQ(order->fields()[0].enum_values.size(), 2U);
   EXPECT_EQ(order->fields()[0].enum_values[0].name, "Buy");
+}
+
+TEST(UprLoaderTest, ParsesCollectionsVariantsPresenceAndConditions) {
+  const auto definition = upr::load_protocol_definition_from_upr(R"upr(
+protocol market_data
+
+struct Level {
+  price: uint16
+  qty: uint16
+}
+
+struct QuoteDetail {
+  best_bid: uint16
+  best_ask: uint16
+}
+
+struct TradeDetail {
+  trade_id: uint32
+}
+
+message Snapshot {
+  kind: uint8
+  presence: uint8
+  level_count: uint8
+  levels: Level[level_count]
+  detail: variant(kind) {
+    1 = QuoteDetail,
+    2 = TradeDetail
+  }
+  note_len: uint8 present(presence, 0)
+  note: utf8[note_len] present(presence, 0)
+  revision: uint8 if(kind == 2)
+}
+)upr");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().structs.size(), 3U);
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  const upr::MessageDefinition& snapshot = definition.value().messages.front();
+  ASSERT_EQ(snapshot.fields.size(), 8U);
+  EXPECT_EQ(snapshot.fields[3].kind, upr::FieldKind::kCollection);
+  EXPECT_EQ(snapshot.fields[3].referenced_type, "Level");
+  EXPECT_EQ(snapshot.fields[3].count_from_field, "level_count");
+  EXPECT_EQ(snapshot.fields[4].kind, upr::FieldKind::kVariant);
+  EXPECT_EQ(snapshot.fields[4].tag_from_field, "kind");
+  ASSERT_EQ(snapshot.fields[4].variant_cases.size(), 2U);
+  EXPECT_EQ(snapshot.fields[5].presence->field, "presence");
+  EXPECT_EQ(snapshot.fields[6].presence->bit_index, 0U);
+  ASSERT_TRUE(snapshot.fields[6].condition.has_value() == false);
+  ASSERT_TRUE(snapshot.fields[6].presence.has_value());
+  ASSERT_TRUE(snapshot.fields.back().condition.has_value());
+  EXPECT_EQ(snapshot.fields.back().condition->field, "kind");
+  EXPECT_EQ(snapshot.fields.back().condition->equals_unsigned, 2U);
+}
+
+TEST(UprLoaderTest, RejectsInvalidAdvancedFieldDeclarations) {
+  struct Case {
+    const char* upr;
+    const char* expected_message_substring;
+  };
+
+  const std::vector<Case> cases = {
+      {
+          .upr = R"upr(
+protocol broken
+)upr",
+          .expected_message_substring = "requires at least one message",
+      },
+      {
+          .upr = R"upr(
+protocol broken
+message Packet {
+  detail: variant(kind
+}
+)upr",
+          .expected_message_substring = "Expected ')' after variant tag field",
+      },
+      {
+          .upr = R"upr(
+protocol broken
+message Packet {
+  revision: uint8 if(kind = 2)
+}
+)upr",
+          .expected_message_substring = "Expected '==' in conditional field declaration",
+      },
+      {
+          .upr = R"upr(
+protocol broken
+message Packet {
+  note: uint8 present(flags)
+}
+)upr",
+          .expected_message_substring = "Expected ',' after presence field",
+      },
+      {
+          .upr = R"upr(
+protocol broken
+struct Level { value: uint8 }
+message Packet {
+  levels: Level[]
+}
+)upr",
+          .expected_message_substring = "Expected a fixed count or field reference inside '[...]'",
+      },
+      {
+          .upr = R"upr(
+protocol broken
+struct QuoteDetail { price: uint8 }
+message Packet {
+  detail: variant(kind) { = QuoteDetail }
+}
+)upr",
+          .expected_message_substring = "Expected variant tag value",
+      },
+  };
+
+  for (const Case& test_case : cases) {
+    const auto definition = upr::load_protocol_definition_from_upr(test_case.upr);
+    ASSERT_FALSE(definition.ok());
+    EXPECT_EQ(definition.status().code(), upr::StatusCode::kInvalidArgument);
+    EXPECT_NE(std::string(definition.status().message()).find(test_case.expected_message_substring), std::string::npos);
+  }
+}
+
+TEST(UprLoaderTest, RejectsInvalidValidationAndStringSyntax) {
+  struct Case {
+    const char* upr_text;
+    const char* expected_message_substring;
+  };
+
+  const std::vector<Case> cases = {
+      {
+          .upr_text = R"upr(
+protocol broken
+message Packet {
+  value: uint8
+  validate(value 1)
+}
+)upr",
+          .expected_message_substring = "Expected a validation comparison operator",
+      },
+      {
+          .upr_text = R"upr(
+protocol broken
+message Packet {
+  value: uint8
+  validate(value == 1, nope(value == 1))
+}
+)upr",
+          .expected_message_substring = "Expected 'if' after validation comma",
+      },
+      {
+          .upr_text = R"upr(
+protocol broken
+message Packet {
+  note: string["unterminated\q"]
+}
+)upr",
+          .expected_message_substring = "Unsupported escape sequence",
+      },
+      {
+          .upr_text = R"upr(
+protocol broken
+message Packet {
+  note: string["unterminated\"
+}
+)upr",
+          .expected_message_substring = "Unterminated string literal",
+      },
+  };
+
+  for (const Case& test_case : cases) {
+    const auto definition = upr::load_protocol_definition_from_upr(test_case.upr_text);
+    ASSERT_FALSE(definition.ok());
+    EXPECT_NE(std::string(definition.status().message()).find(test_case.expected_message_substring), std::string::npos);
+  }
+}
+
+TEST(UprLoaderTest, ParsesFixedCountCollections) {
+  const auto definition = upr::load_protocol_definition_from_upr(R"upr(
+protocol sensors
+
+struct Reading {
+  value: uint16
+}
+
+message Packet {
+  readings: Reading[3]
+}
+)upr");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  ASSERT_EQ(definition.value().messages[0].fields.size(), 1U);
+  const upr::FieldDefinition& field = definition.value().messages[0].fields[0];
+  EXPECT_EQ(field.kind, upr::FieldKind::kCollection);
+  EXPECT_EQ(field.fixed_count, 3U);
 }
 
 struct InvalidUprCase {
@@ -707,7 +906,7 @@ TEST(UprLoaderTest, RejectsWorkspaceRelativeImportOutsideWorkspace) {
     ASSERT_TRUE(out.is_open());
     out << R"upr(
 protocol root
-import "examples/order_types.upr"
+import "examples/schema/order_types.upr"
 message Packet {
   id: uint8
 }
@@ -927,6 +1126,34 @@ message Order {
   const auto compiled = upr::compile_protocol(definition.value());
   ASSERT_FALSE(compiled.ok());
   EXPECT_EQ(compiled.status().code(), upr::StatusCode::kInvalidArgument);
+}
+
+TEST(UprLoaderTest, ParsesReservedAlignedFieldsAndValidateStatements) {
+  const auto definition = upr::load_protocol_definition_from_upr(R"upr(
+protocol hardware
+
+message Packet {
+  version: uint8
+  pad: reserved[3] align(4)
+  payload_len: uint8
+  item_count: uint8
+  validate(payload_len == item_count * 4, if(version == 2))
+}
+)upr");
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  const auto& message = definition.value().messages.front();
+  ASSERT_EQ(message.fields.size(), 4U);
+  EXPECT_TRUE(message.fields[1].is_reserved);
+  EXPECT_EQ(message.fields[1].alignment, 4U);
+  ASSERT_EQ(message.validations.size(), 1U);
+  EXPECT_EQ(message.validations[0].field, "payload_len");
+  EXPECT_TRUE(message.validations[0].compare_to_field);
+  EXPECT_EQ(message.validations[0].other_field, "item_count");
+  EXPECT_EQ(message.validations[0].multiplier, 4U);
+  ASSERT_TRUE(message.validations[0].when.has_value());
+  EXPECT_EQ(message.validations[0].when->field, "version");
 }
 
 }  // namespace
