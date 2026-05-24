@@ -85,6 +85,14 @@ template <ByteOrder byte_order, std::size_t WidthBytes>
 }
 
 // Returns false (and writes nothing) if the span has the wrong size.
+/**
+ * @brief Writes an unsigned scalar into a fixed-width span.
+ * @tparam byte_order Wire byte order.
+ * @tparam WidthBytes Scalar width in bytes.
+ * @param bytes Destination span.
+ * @param value Raw scalar value to encode.
+ * @return `true` when the destination span has the expected width.
+ */
 template <ByteOrder byte_order, std::size_t WidthBytes>
 [[nodiscard]] constexpr bool write_unsigned_scalar(MutableByteSpan bytes, uint64_t value) noexcept {
   validate_scalar_width<WidthBytes>();
@@ -96,6 +104,13 @@ template <ByteOrder byte_order, std::size_t WidthBytes>
 }
 
 // Runtime-dispatch version: width determined at run time.
+/**
+ * @brief Writes an unsigned scalar with compile-time byte order and runtime width.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Destination span.
+ * @param value Raw scalar value to encode.
+ * @return `true` when the width is supported.
+ */
 template <ByteOrder byte_order>
 [[nodiscard]] constexpr bool write_unsigned_scalar(MutableByteSpan bytes, uint64_t value) noexcept {
   switch (bytes.size()) {
@@ -153,6 +168,13 @@ template <ByteOrder byte_order>
 }
 
 // Full runtime dispatch (byte_order and width both dynamic).
+/**
+ * @brief Writes an unsigned scalar with runtime byte-order dispatch.
+ * @param bytes Destination span.
+ * @param value Raw scalar value to encode.
+ * @param byte_order Wire byte order.
+ * @return `true` when the width and byte order are supported.
+ */
 [[nodiscard]] constexpr bool write_unsigned_scalar(MutableByteSpan bytes,
                                                    uint64_t value,
                                                    ByteOrder byte_order) noexcept {
@@ -179,6 +201,13 @@ template <ByteOrder byte_order>
   unreachable();
 }
 
+/**
+ * @brief Writes a 32-bit floating-point value with compile-time byte order.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Destination span.
+ * @param value Floating-point value to encode.
+ * @return `true` when the destination span has the expected width.
+ */
 template <ByteOrder byte_order>
 [[nodiscard]] constexpr bool write_float32(MutableByteSpan bytes, float value) noexcept {
   return write_unsigned_scalar<byte_order, sizeof(uint32_t)>(bytes, std::bit_cast<uint32_t>(value));
@@ -189,6 +218,13 @@ template <ByteOrder byte_order>
   write_unsigned_scalar_unchecked<byte_order, sizeof(uint32_t)>(bytes, std::bit_cast<uint32_t>(value));
 }
 
+/**
+ * @brief Writes a 32-bit floating-point value with runtime byte-order dispatch.
+ * @param bytes Destination span.
+ * @param value Floating-point value to encode.
+ * @param byte_order Wire byte order.
+ * @return `true` when the destination span has the expected width.
+ */
 [[nodiscard]] constexpr bool write_float32(MutableByteSpan bytes, float value, ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -199,6 +235,13 @@ template <ByteOrder byte_order>
   unreachable();
 }
 
+/**
+ * @brief Writes a 64-bit floating-point value with compile-time byte order.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Destination span.
+ * @param value Floating-point value to encode.
+ * @return `true` when the destination span has the expected width.
+ */
 template <ByteOrder byte_order>
 [[nodiscard]] constexpr bool write_float64(MutableByteSpan bytes, double value) noexcept {
   return write_unsigned_scalar<byte_order, sizeof(uint64_t)>(bytes, std::bit_cast<uint64_t>(value));
@@ -209,6 +252,13 @@ template <ByteOrder byte_order>
   write_unsigned_scalar_unchecked<byte_order, sizeof(uint64_t)>(bytes, std::bit_cast<uint64_t>(value));
 }
 
+/**
+ * @brief Writes a 64-bit floating-point value with runtime byte-order dispatch.
+ * @param bytes Destination span.
+ * @param value Floating-point value to encode.
+ * @param byte_order Wire byte order.
+ * @return `true` when the destination span has the expected width.
+ */
 [[nodiscard]] constexpr bool write_float64(MutableByteSpan bytes, double value, ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -220,6 +270,12 @@ template <ByteOrder byte_order>
 }
 
 // Copy src bytes into dest. Returns false if sizes don't match.
+/**
+ * @brief Copies one byte span into another.
+ * @param dest Destination span.
+ * @param src Source span.
+ * @return `true` when both spans have the same size.
+ */
 [[nodiscard]] constexpr bool write_bytes(MutableByteSpan dest, ByteSpan src) noexcept {
   if (dest.size() != src.size()) {
     return false;

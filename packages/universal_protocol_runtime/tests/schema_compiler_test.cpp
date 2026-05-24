@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -260,6 +261,25 @@ TEST(SchemaCompilerTest, CompilesFixedCollectionsWithVariableElementsAndVariants
   EXPECT_FALSE(packet->has_fixed_size());
 }
 
+TEST(SchemaCompilerTest, ConditionalAlignmentDoesNotInflateMinimumSize) {
+  upr::FieldDefinition flags = upr_test_support::make_scalar_field("flags", upr::FieldKind::kUnsigned, 1);
+  upr::FieldDefinition optional_word =
+      upr_test_support::make_scalar_field("optional_word", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::set_presence(&optional_word, "flags", 0);
+  upr_test_support::set_alignment(&optional_word, 8);
+
+  upr::StatusOr<upr::CompiledProtocol> compiled = upr::compile_protocol(upr_test_support::make_protocol(
+      "conditional_alignment",
+      {upr_test_support::make_message(
+          "Packet",
+          {flags, optional_word, upr_test_support::make_scalar_field("tail", upr::FieldKind::kUnsigned, 1)})}));
+
+  ASSERT_TRUE(compiled.ok()) << compiled.status().message();
+  const upr::CompiledMessage* packet = compiled.value().find_message("Packet");
+  ASSERT_NE(packet, nullptr);
+  EXPECT_EQ(packet->minimum_size(), 2U);
+}
+
 TEST(SchemaCompilerTest, RejectsInvalidAdvancedFieldShapes) {
   struct Case {
     upr::ProtocolDefinition definition;
@@ -305,6 +325,20 @@ TEST(SchemaCompilerTest, RejectsInvalidAdvancedFieldShapes) {
             {upr_test_support::make_struct(
                 "Item", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)})}),
         .expected_message_substring = "must use an unsigned or enum field as its count source",
+    });
+  }
+
+  {
+    cases.push_back({
+        .definition = upr_test_support::make_protocol(
+            "overflowing_fixed_collection",
+            {upr_test_support::make_message(
+                "Packet",
+                {upr_test_support::make_fixed_collection_field("items", "Item", std::numeric_limits<size_t>::max())})},
+            {upr_test_support::make_struct(
+                "Item", {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 2)})}),
+        .expected_message_substring = "exceeds the supported size range",
+        .expected_code = upr::StatusCode::kExhausted,
     });
   }
 

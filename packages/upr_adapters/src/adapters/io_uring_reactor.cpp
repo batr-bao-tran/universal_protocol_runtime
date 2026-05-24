@@ -356,7 +356,7 @@ StatusOr<bool> IoUringStreamEngine::wait_until_readable(int timeout_ms) const {
     }
     if (completion.user_data == timeout_tag) {
       saw_timeout = true;
-      if (completion.result != -ECANCELED && completion.result != -ETIME) {
+      if (completion.result != -ECANCELED && completion.result != -ETIME && completion.result != -ENOENT) {
         return status_from_uring_errno("link_timeout(POLLIN)", completion.result);
       }
       continue;
@@ -418,7 +418,7 @@ StatusOr<bool> IoUringStreamEngine::wait_until_writable(int timeout_ms) const {
     }
     if (completion.user_data == timeout_tag) {
       saw_timeout = true;
-      if (completion.result != -ECANCELED && completion.result != -ETIME) {
+      if (completion.result != -ECANCELED && completion.result != -ETIME && completion.result != -ENOENT) {
         return status_from_uring_errno("link_timeout(POLLOUT)", completion.result);
       }
       continue;

@@ -1,5 +1,8 @@
 #ifndef UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UNIVERSAL_PROTOCOL_RUNTIME_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME__UNIVERSAL_PROTOCOL_RUNTIME_HPP_
 #define UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UNIVERSAL_PROTOCOL_RUNTIME_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME__UNIVERSAL_PROTOCOL_RUNTIME_HPP_
+/**
+ * @brief Umbrella include for the public Universal Protocol Runtime API surface.
+ */
 #include "universal_protocol_runtime/adapters/posix_fd_transport.hpp"
 #include "universal_protocol_runtime/adapters/posix_socket_transport.hpp"
 #include "universal_protocol_runtime/codegen/bindings_generator.hpp"

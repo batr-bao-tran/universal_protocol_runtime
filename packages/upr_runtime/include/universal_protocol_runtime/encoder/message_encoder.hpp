@@ -19,9 +19,16 @@ struct EncodePlan {
   const CompiledProtocol* protocol = nullptr;
   const CompiledMessage* layout = nullptr;
 
+  /**
+   * @brief Reports whether the plan references a compiled message layout.
+   * @return `true` when the plan can be used for encode.
+   */
   [[nodiscard]] bool valid() const noexcept { return protocol != nullptr && layout != nullptr; }
 };
 
+/**
+ * @brief One contiguous encoded byte span produced by segmented encode.
+ */
 struct EncodedSegment {
   ByteSpan bytes;
 };
@@ -47,29 +54,92 @@ struct EncodedSegment {
 class MessageBuilder {
  public:
   MessageBuilder() = default;
+  /**
+   * @brief Constructs a contiguous message builder for one compiled layout.
+   * @param protocol Compiled protocol metadata.
+   * @param layout Compiled message layout to encode.
+   * @param buffer Output buffer to fill.
+   */
   MessageBuilder(const CompiledProtocol& protocol, const CompiledMessage& layout, MutableByteSpan buffer);
 
+  /**
+   * @brief Destroys the message builder.
+   * @return No return value.
+   */
   ~MessageBuilder() noexcept = default;
 
   // Returns false if the builder was default-constructed or construction failed.
+  /**
+   * @brief Reports whether the builder is ready to encode.
+   * @return `true` when the builder references a valid layout and buffer.
+   */
   [[nodiscard]] bool valid() const noexcept { return layout_ != nullptr; }
 
+  /**
+   * @brief Encodes an unsigned scalar field.
+   * @param id Field identifier to write.
+   * @param value Raw unsigned value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_unsigned(FieldId id, uint64_t value);
+  /**
+   * @brief Encodes a signed scalar field.
+   * @param id Field identifier to write.
+   * @param value Signed value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_signed(FieldId id, int64_t value);
+  /**
+   * @brief Encodes a `float32` field.
+   * @param id Field identifier to write.
+   * @param value Floating-point value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_float32(FieldId id, float value);
+  /**
+   * @brief Encodes a `float64` field.
+   * @param id Field identifier to write.
+   * @param value Floating-point value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_float64(FieldId id, double value);
 
   // The payload is copied into the output buffer.
+  /**
+   * @brief Encodes a bytes field by copying its payload into the output buffer.
+   * @param id Field identifier to write.
+   * @param bytes Payload bytes to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_bytes(FieldId id, ByteSpan bytes);
+  /**
+   * @brief Encodes a string field by copying its payload into the output buffer.
+   * @param id Field identifier to write.
+   * @param str String payload to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_string(FieldId id, std::string_view str);
 
   // Auto-advance past any remaining fixed-value / checksum fields, compute
   // and write all checksums, and report the total bytes written.
+  /**
+   * @brief Finalizes the message, computes checksums, and reports total bytes written.
+   * @param bytes_written Optional output for total encoded size.
+   * @return Encode status for finalization.
+   */
   EncodeStatus finalize(std::size_t* bytes_written = nullptr);
 
+  /**
+   * @brief Reports whether the builder has been finalized.
+   * @return `true` when no more fields can be written.
+   */
   [[nodiscard]] bool finalized() const noexcept { return finalized_; }
 
   // Non-owning view over the bytes that have been committed so far.
+  /**
+   * @brief Returns the bytes committed so far.
+   * @return Borrowed byte span over the encoded prefix.
+   */
   [[nodiscard]] ByteSpan view() const noexcept;
 
  private:
@@ -107,26 +177,107 @@ class MessageBuilder {
 class SegmentedMessageBuilder {
  public:
   SegmentedMessageBuilder() = default;
+  /**
+   * @brief Constructs a segmented message builder for one compiled layout.
+   * @param protocol Compiled protocol metadata.
+   * @param layout Compiled message layout to encode.
+   * @param scratch_buffer Scratch storage for owned segments.
+   */
   SegmentedMessageBuilder(const CompiledProtocol& protocol,
                           const CompiledMessage& layout,
                           MutableByteSpan scratch_buffer);
 
+  /**
+   * @brief Destroys the segmented message builder.
+   * @return No return value.
+   */
   ~SegmentedMessageBuilder() noexcept = default;
 
+  /**
+   * @brief Reports whether the builder is ready to encode.
+   * @return `true` when the builder references a valid layout and scratch buffer.
+   */
   [[nodiscard]] bool valid() const noexcept { return layout_ != nullptr; }
 
+  /**
+   * @brief Encodes an unsigned scalar field into segmented output.
+   * @param id Field identifier to write.
+   * @param value Raw unsigned value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_unsigned(FieldId id, uint64_t value);
+  /**
+   * @brief Encodes a signed scalar field into segmented output.
+   * @param id Field identifier to write.
+   * @param value Signed value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_signed(FieldId id, int64_t value);
+  /**
+   * @brief Encodes a `float32` field into segmented output.
+   * @param id Field identifier to write.
+   * @param value Floating-point value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_float32(FieldId id, float value);
+  /**
+   * @brief Encodes a `float64` field into segmented output.
+   * @param id Field identifier to write.
+   * @param value Floating-point value to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_float64(FieldId id, double value);
+  /**
+   * @brief Encodes a bytes field by copying it into owned segmented storage.
+   * @param id Field identifier to write.
+   * @param bytes Payload bytes to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_bytes(FieldId id, ByteSpan bytes);
+  /**
+   * @brief Encodes a string field by copying it into owned segmented storage.
+   * @param id Field identifier to write.
+   * @param str String payload to encode.
+   * @return Encode status for the write.
+   */
   EncodeStatus set_string(FieldId id, std::string_view str);
+  /**
+   * @brief Attaches an external bytes payload without copying it.
+   * @param id Field identifier to write.
+   * @param bytes Borrowed payload bytes to attach.
+   * @return Encode status for the write.
+   */
   EncodeStatus attach_bytes(FieldId id, ByteSpan bytes);
+  /**
+   * @brief Attaches an external string payload without copying it.
+   * @param id Field identifier to write.
+   * @param str Borrowed string payload to attach.
+   * @return Encode status for the write.
+   */
   EncodeStatus attach_string(FieldId id, std::string_view str);
+  /**
+   * @brief Finalizes segmented output, computes checksums, and reports total bytes written.
+   * @param bytes_written Optional output for total encoded size.
+   * @return Encode status for finalization.
+   */
   EncodeStatus finalize(std::size_t* bytes_written = nullptr);
+  /**
+   * @brief Copies segmented output into one contiguous destination buffer.
+   * @param output Destination buffer to fill.
+   * @param bytes_written Optional output for total encoded size.
+   * @return Encode status for the copy.
+   */
   EncodeStatus copy_to(MutableByteSpan output, std::size_t* bytes_written = nullptr) const;
 
+  /**
+   * @brief Reports whether the builder has been finalized.
+   * @return `true` when no more fields can be written.
+   */
   [[nodiscard]] bool finalized() const noexcept { return finalized_; }
+  /**
+   * @brief Returns the encoded segment list after segmented writes.
+   * @return Borrowed span of encoded segments.
+   */
   [[nodiscard]] std::span<const EncodedSegment> segments() const noexcept { return {segments_.data(), segment_count_}; }
 
  private:
@@ -166,21 +317,67 @@ class SegmentedMessageBuilder {
  */
 class ProtocolEncoder {
  public:
+  /**
+   * @brief Constructs an encoder bound to one compiled protocol.
+   * @param protocol Compiled protocol metadata used for message lookup.
+   */
   explicit ProtocolEncoder(const CompiledProtocol& protocol) : protocol_(&protocol) {}
 
+  /**
+   * @brief Destroys the protocol encoder.
+   * @return No return value.
+   */
   ~ProtocolEncoder() noexcept = default;
 
+  /**
+   * @brief Returns the compiled protocol backing this encoder.
+   * @return Pointer to compiled protocol metadata.
+   */
   const CompiledProtocol* protocol() const noexcept { return protocol_; }
 
   // Create a MessageBuilder targeting `message_name` and writing into `buffer`.
   // Returns std::nullopt if the message is not found in the protocol.
+  /**
+   * @brief Builds a contiguous message builder by message name.
+   * @param message_name Message name to encode.
+   * @param buffer Output buffer to fill.
+   * @return Message builder when the message exists.
+   */
   std::optional<MessageBuilder> build(std::string_view message_name, MutableByteSpan buffer) const;
+  /**
+   * @brief Builds a contiguous message builder from a cached encode plan.
+   * @param plan Cached encode plan.
+   * @param buffer Output buffer to fill.
+   * @return Message builder when the plan is valid.
+   */
   std::optional<MessageBuilder> build(const EncodePlan& plan, MutableByteSpan buffer) const;
+  /**
+   * @brief Builds a segmented message builder by message name.
+   * @param message_name Message name to encode.
+   * @param scratch_buffer Scratch storage for owned segments.
+   * @return Segmented message builder when the message exists.
+   */
   std::optional<SegmentedMessageBuilder> build_segmented(std::string_view message_name,
                                                          MutableByteSpan scratch_buffer) const;
+  /**
+   * @brief Builds a segmented message builder from a cached encode plan.
+   * @param plan Cached encode plan.
+   * @param scratch_buffer Scratch storage for owned segments.
+   * @return Segmented message builder when the plan is valid.
+   */
   std::optional<SegmentedMessageBuilder> build_segmented(const EncodePlan& plan, MutableByteSpan scratch_buffer) const;
+  /**
+   * @brief Creates a reusable encode plan for one message.
+   * @param message_name Message name to resolve.
+   * @return Encode plan when the message exists.
+   */
   std::optional<EncodePlan> make_plan(std::string_view message_name) const;
 
+  /**
+   * @brief Finds a compiled message by name.
+   * @param message_name Message name to resolve.
+   * @return Pointer to the compiled message layout when found.
+   */
   const CompiledMessage* find_message(std::string_view message_name) const;
 
  private:

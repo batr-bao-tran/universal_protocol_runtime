@@ -8,12 +8,30 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief In-memory transport that serves bytes from a fixed span.
+ */
 class SpanTransport final : public ITransport {
  public:
+  /**
+   * @brief Constructs a span-backed transport.
+   * @param source Source bytes to expose through `read`.
+   * @param chunk_size Optional maximum bytes returned per read.
+   * @return No return value.
+   */
   explicit SpanTransport(ByteSpan source, size_t chunk_size = 0) : source_(source), chunk_size_(chunk_size) {}
 
+  /**
+   * @brief Destroys the transport.
+   * @return No return value.
+   */
   ~SpanTransport() noexcept override = default;
 
+  /**
+   * @brief Copies the next chunk of bytes into the destination span.
+   * @param destination Writable destination span.
+   * @return Read result for this span-backed read.
+   */
   ReadResult read(MutableByteSpan destination) override {
     if (!open_) {
       return {.end_of_stream = true};
@@ -36,6 +54,10 @@ class SpanTransport final : public ITransport {
     };
   }
 
+  /**
+   * @brief Reports whether unread source bytes remain.
+   * @return `true` when the transport has not reached EOF.
+   */
   bool is_open() const override { return open_; }
 
  private:

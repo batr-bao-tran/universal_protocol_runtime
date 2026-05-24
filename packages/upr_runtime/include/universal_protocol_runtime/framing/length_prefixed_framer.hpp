@@ -8,6 +8,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Options for framing messages with a fixed-width length prefix.
+ */
 struct LengthPrefixedFramerOptions {
   uint8_t prefix_width_bytes = 2;
   ByteOrder byte_order = ByteOrder::kLittleEndian;
@@ -15,12 +18,30 @@ struct LengthPrefixedFramerOptions {
   size_t max_payload_size = 1024 * 1024;
 };
 
+/**
+ * @brief Framer that extracts messages preceded by a numeric length prefix.
+ */
 class LengthPrefixedFramer final : public IFramer {
  public:
+  /**
+   * @brief Constructs a length-prefixed framer.
+   * @param options Framer configuration.
+   * @return No return value.
+   */
   explicit LengthPrefixedFramer(LengthPrefixedFramerOptions options) : options_(options) {}
 
+  /**
+   * @brief Destroys the framer.
+   * @return No return value.
+   */
   ~LengthPrefixedFramer() noexcept override = default;
 
+  /**
+   * @brief Attempts to extract one length-prefixed frame.
+   * @param readable_bytes Contiguous readable bytes to inspect.
+   * @param frame Destination frame slice when a frame is ready.
+   * @return Framing status for the current readable bytes.
+   */
   FrameStatus try_frame(ByteSpan readable_bytes, FrameSlice* frame) const override;
 
  private:

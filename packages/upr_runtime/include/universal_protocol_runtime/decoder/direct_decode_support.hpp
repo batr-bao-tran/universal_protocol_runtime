@@ -117,6 +117,13 @@ constexpr uint64_t read_unsigned_scalar_unchecked(ByteSpan bytes) noexcept {
   return value;
 }
 
+/**
+ * @brief Reads an unsigned scalar with a compile-time byte order and width.
+ * @tparam byte_order Wire byte order.
+ * @tparam WidthBytes Scalar width in bytes.
+ * @param bytes Source bytes to decode.
+ * @return Decoded scalar when the span has the expected width.
+ */
 template <ByteOrder byte_order, std::size_t WidthBytes>
 constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes) noexcept {
   validate_scalar_width<WidthBytes>();
@@ -126,6 +133,12 @@ constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes) noexcept 
   return read_unsigned_scalar_unchecked<byte_order, WidthBytes>(bytes);
 }
 
+/**
+ * @brief Reads an unsigned scalar with a compile-time byte order and runtime width.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Source bytes to decode.
+ * @return Decoded scalar when the width is supported.
+ */
 template <ByteOrder byte_order>
 constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes) noexcept {
   switch (bytes.size()) {
@@ -150,6 +163,12 @@ constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes) noexcept 
   }
 }
 
+/**
+ * @brief Reads an unsigned scalar with runtime byte-order dispatch.
+ * @param bytes Source bytes to decode.
+ * @param byte_order Wire byte order.
+ * @return Decoded scalar when the width and order are supported.
+ */
 constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes, ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -160,6 +179,12 @@ constexpr std::optional<uint64_t> read_unsigned_scalar(ByteSpan bytes, ByteOrder
   unreachable();  // LCOV_EXCL_LINE
 }
 
+/**
+ * @brief Sign-extends a raw unsigned value to a signed integer width.
+ * @param value Raw field value.
+ * @param width_bits Significant width in bits.
+ * @return Sign-extended value when the width is valid.
+ */
 constexpr std::optional<int64_t> sign_extend(uint64_t value, uint8_t width_bits) noexcept {
   if (width_bits == 0 || width_bits > kMaxBitWidth) {
     return std::nullopt;
@@ -176,6 +201,12 @@ constexpr std::optional<int64_t> sign_extend(uint64_t value, uint8_t width_bits)
   return static_cast<int64_t>(value | ~full_mask);
 }
 
+/**
+ * @brief Reads a 32-bit floating-point value with a compile-time byte order.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Source bytes to decode.
+ * @return Decoded float when the span has the expected width.
+ */
 template <ByteOrder byte_order>
 constexpr std::optional<float> read_float32(ByteSpan bytes) noexcept {
   const auto raw = read_unsigned_scalar<byte_order, sizeof(uint32_t)>(bytes);
@@ -185,6 +216,12 @@ constexpr std::optional<float> read_float32(ByteSpan bytes) noexcept {
   return std::bit_cast<float>(static_cast<uint32_t>(*raw));
 }
 
+/**
+ * @brief Reads a 32-bit floating-point value with runtime byte-order dispatch.
+ * @param bytes Source bytes to decode.
+ * @param byte_order Wire byte order.
+ * @return Decoded float when the span has the expected width.
+ */
 constexpr std::optional<float> read_float32(ByteSpan bytes, ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -195,6 +232,12 @@ constexpr std::optional<float> read_float32(ByteSpan bytes, ByteOrder byte_order
   unreachable();
 }
 
+/**
+ * @brief Reads a 64-bit floating-point value with a compile-time byte order.
+ * @tparam byte_order Wire byte order.
+ * @param bytes Source bytes to decode.
+ * @return Decoded double when the span has the expected width.
+ */
 template <ByteOrder byte_order>
 constexpr std::optional<double> read_float64(ByteSpan bytes) noexcept {
   const auto raw = read_unsigned_scalar<byte_order, sizeof(uint64_t)>(bytes);
@@ -204,6 +247,12 @@ constexpr std::optional<double> read_float64(ByteSpan bytes) noexcept {
   return std::bit_cast<double>(*raw);
 }
 
+/**
+ * @brief Reads a 64-bit floating-point value with runtime byte-order dispatch.
+ * @param bytes Source bytes to decode.
+ * @param byte_order Wire byte order.
+ * @return Decoded double when the span has the expected width.
+ */
 constexpr std::optional<double> read_float64(ByteSpan bytes, ByteOrder byte_order) noexcept {
   switch (byte_order) {
     case ByteOrder::kLittleEndian:
@@ -214,6 +263,13 @@ constexpr std::optional<double> read_float64(ByteSpan bytes, ByteOrder byte_orde
   unreachable();
 }
 
+/**
+ * @brief Tests whether a byte span starts with a fixed prefix.
+ * @tparam Extent Prefix width in bytes.
+ * @param bytes Candidate byte span.
+ * @param prefix Required prefix bytes.
+ * @return `true` when the prefix matches.
+ */
 template <std::size_t Extent>
 constexpr bool starts_with(ByteSpan bytes, const std::array<std::byte, Extent>& prefix) noexcept {
   if (bytes.size() < Extent) {
@@ -227,14 +283,35 @@ constexpr bool starts_with(ByteSpan bytes, const std::array<std::byte, Extent>& 
   return true;
 }
 
+/**
+ * @brief Validates that a byte span is pure 7-bit ASCII.
+ * @param bytes Candidate byte span.
+ * @return `true` when every byte is valid ASCII.
+ */
 constexpr bool is_valid_ascii(ByteSpan bytes) noexcept { return detail::is_valid_ascii_scalar(bytes); }
 
+/**
+ * @brief Validates ASCII using runtime-optimized routines when available.
+ * @param bytes Candidate byte span.
+ * @return `true` when every byte is valid ASCII.
+ */
 inline bool runtime_is_valid_ascii(ByteSpan bytes) noexcept { return detail::runtime_is_valid_ascii(bytes); }
 
+/**
+ * @brief Validates UTF-8 using runtime-optimized routines when available.
+ * @param bytes Candidate byte span.
+ * @return `true` when the byte span is valid UTF-8.
+ */
 inline bool runtime_is_valid_utf8(ByteSpan bytes) noexcept { return detail::runtime_is_valid_utf8(bytes); }
 
 constexpr bool is_valid_utf8(ByteSpan bytes) noexcept;
 
+/**
+ * @brief Validates a string field for the configured encoding using runtime helpers.
+ * @tparam encoding String encoding to validate.
+ * @param bytes Candidate byte span.
+ * @return `true` when the bytes satisfy the encoding.
+ */
 template <StringEncoding encoding>
 inline bool runtime_validate_string(ByteSpan bytes) noexcept {
   if constexpr (encoding == StringEncoding::kAscii) {
@@ -244,6 +321,11 @@ inline bool runtime_validate_string(ByteSpan bytes) noexcept {
   }
 }
 
+/**
+ * @brief Validates that a byte span is well-formed UTF-8.
+ * @param bytes Candidate byte span.
+ * @return `true` when the byte span is valid UTF-8.
+ */
 constexpr bool is_valid_utf8(ByteSpan bytes) noexcept {
   size_t index = 0;
   while (index < bytes.size()) {

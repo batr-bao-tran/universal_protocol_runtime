@@ -17,6 +17,9 @@
 
 namespace universal_protocol_runtime {
 
+/**
+ * @brief Transparent string hash for heterogeneous lookup in name maps.
+ */
 struct TransparentStringHash {
   using is_transparent = void;
 
@@ -36,11 +39,17 @@ enum class ChecksumAnchorKind {
   kAfterSelf,
 };
 
+/**
+ * @brief Resolved checksum anchor used by compiled runtime metadata.
+ */
 struct CompiledChecksumAnchor {
   ChecksumAnchorKind kind = ChecksumAnchorKind::kFrameStart;
   FieldId field_id = 0;
 };
 
+/**
+ * @brief Compiled bit-field metadata.
+ */
 struct CompiledBitField {
   BitFieldId id = 0;
   std::string name;
@@ -52,6 +61,9 @@ struct CompiledBitField {
   std::vector<EnumValueDefinition> enum_values;
 };
 
+/**
+ * @brief Compiled checksum metadata.
+ */
 struct CompiledChecksum {
   enum class BuiltinKind {
     kCustom,
@@ -71,6 +83,9 @@ struct CompiledChecksum {
   CompiledChecksumAnchor to;
 };
 
+/**
+ * @brief One compiled tagged-variant case.
+ */
 struct CompiledVariantCase {
   uint64_t tag_value = 0;
   size_t struct_id = 0;
@@ -85,6 +100,9 @@ enum class CompiledValidationOperator {
   kGe,
 };
 
+/**
+ * @brief Compiled validation rule metadata.
+ */
 struct CompiledValidationRule {
   FieldId field_id = 0;
   CompiledValidationOperator op = CompiledValidationOperator::kEq;
@@ -97,6 +115,9 @@ struct CompiledValidationRule {
   uint64_t when_equals = 0;
 };
 
+/**
+ * @brief Compiled field metadata used by decoders and encoders.
+ */
 struct CompiledField {
   static constexpr uint32_t kVariantLookupMissing = std::numeric_limits<uint32_t>::max();
 
@@ -131,13 +152,25 @@ struct CompiledField {
   uint64_t expected_unsigned = 0;
   std::vector<EnumValueDefinition> enum_values;
 
+  /**
+   * @brief Checks whether the field is represented by a scalar wire value.
+   * @return `true` when the field kind is scalar.
+   */
   constexpr bool is_scalar() const noexcept {
     return kind == FieldKind::kUnsigned || kind == FieldKind::kSigned || kind == FieldKind::kFloat32 ||
            kind == FieldKind::kFloat64 || kind == FieldKind::kEnum;
   }
 
+  /**
+   * @brief Checks whether the field may be omitted at runtime.
+   * @return `true` when the field has a condition or presence bit.
+   */
   constexpr bool is_conditionally_present() const noexcept { return has_condition || has_presence; }
 
+  /**
+   * @brief Returns the minimum byte contribution of the field.
+   * @return Minimum bytes this field contributes to message size.
+   */
   constexpr size_t minimum_size_contribution() const noexcept {
     if (is_conditionally_present()) {
       return 0;
@@ -155,6 +188,9 @@ struct CompiledField {
   }
 };
 
+/**
+ * @brief Compiled message or struct layout metadata.
+ */
 class CompiledMessage {
  public:
   CompiledMessage() = default;
@@ -193,26 +229,72 @@ class CompiledMessage {
                   bool allow_trailing_bytes,
                   std::vector<std::byte> dispatch_prefix = {});
 
+  /**
+   * @brief Returns the compiled layout name.
+   * @return Layout name.
+   */
   std::string_view name() const { return name_; }
 
+  /**
+   * @brief Returns the compiled field metadata list.
+   * @return Field metadata list.
+   */
   const std::vector<CompiledField>& fields() const { return fields_; }
 
+  /**
+   * @brief Returns the minimum valid byte size for the layout.
+   * @return Minimum valid byte size.
+   */
   size_t minimum_size() const { return minimum_size_; }
 
+  /**
+   * @brief Reports whether the layout size is fixed.
+   * @return `true` when the layout has a fixed wire size.
+   */
   bool has_fixed_size() const { return has_fixed_size_; }
 
+  /**
+   * @brief Reports whether extra trailing bytes are allowed.
+   * @return `true` when trailing bytes are accepted.
+   */
   bool allow_trailing_bytes() const { return allow_trailing_bytes_; }
 
+  /**
+   * @brief Returns the dispatch prefix used for fast message selection.
+   * @return Dispatch prefix bytes.
+   */
   std::span<const std::byte> dispatch_prefix() const { return dispatch_prefix_; }
 
+  /**
+   * @brief Returns compiled bit-field metadata.
+   * @return Bit-field metadata list.
+   */
   const std::vector<CompiledBitField>& bit_fields() const { return bit_fields_; }
 
+  /**
+   * @brief Returns compiled checksum metadata.
+   * @return Checksum metadata list.
+   */
   const std::vector<CompiledChecksum>& checksums() const { return checksums_; }
 
+  /**
+   * @brief Returns compiled validation metadata.
+   * @return Validation metadata list.
+   */
   const std::vector<CompiledValidationRule>& validations() const { return validations_; }
 
+  /**
+   * @brief Resolves a field name to its field identifier.
+   * @param field_name Field name to resolve.
+   * @return Field identifier when the field exists.
+   */
   std::optional<FieldId> find_field(std::string_view field_name) const;
 
+  /**
+   * @brief Resolves a bit-field name to its bit-field identifier.
+   * @param bit_field_name Bit-field name to resolve.
+   * @return Bit-field identifier when the bit field exists.
+   */
   std::optional<BitFieldId> find_bit_field(std::string_view bit_field_name) const;
 
  private:
@@ -229,6 +311,9 @@ class CompiledMessage {
   std::unordered_map<std::string, BitFieldId, TransparentStringHash, std::equal_to<>> bit_field_ids_;
 };
 
+/**
+ * @brief Compiled protocol metadata used by runtime components.
+ */
 class CompiledProtocol {
  public:
   CompiledProtocol() = default;
@@ -239,22 +324,62 @@ class CompiledProtocol {
                    std::vector<CompiledMessage> structs,
                    std::vector<CompiledMessage> messages);
 
+  /**
+   * @brief Returns the protocol name.
+   * @return Protocol name.
+   */
   std::string_view name() const { return name_; }
 
+  /**
+   * @brief Returns the protocol fingerprint.
+   * @return Stable protocol fingerprint.
+   */
   uint64_t fingerprint() const { return fingerprint_; }
 
+  /**
+   * @brief Returns compiled struct layouts.
+   * @return Struct metadata list.
+   */
   const std::vector<CompiledMessage>& structs() const { return structs_; }
 
+  /**
+   * @brief Returns compiled message layouts.
+   * @return Message metadata list.
+   */
   const std::vector<CompiledMessage>& messages() const { return messages_; }
 
+  /**
+   * @brief Finds a compiled message by name.
+   * @param message_name Message name to resolve.
+   * @return Pointer to the compiled message when it exists.
+   */
   const CompiledMessage* find_message(std::string_view message_name) const;
 
+  /**
+   * @brief Finds a compiled struct by name.
+   * @param struct_name Struct name to resolve.
+   * @return Pointer to the compiled struct when it exists.
+   */
   const CompiledMessage* find_struct(std::string_view struct_name) const;
 
+  /**
+   * @brief Resolves a compiled struct by numeric identifier.
+   * @param struct_id Struct identifier.
+   * @return Pointer to the compiled struct when the id is valid.
+   */
   const CompiledMessage* struct_by_id(size_t struct_id) const;
 
+  /**
+   * @brief Returns dispatch candidates for a frame prefix.
+   * @param frame Frame bytes to inspect.
+   * @return Span of candidate message identifiers.
+   */
   std::span<const size_t> dispatch_candidate_ids(ByteSpan frame) const noexcept;
 
+  /**
+   * @brief Returns the fallback message candidate list.
+   * @return Span of fallback message identifiers.
+   */
   std::span<const size_t> fallback_candidate_ids() const noexcept { return fallback_message_ids_; }
 
  private:

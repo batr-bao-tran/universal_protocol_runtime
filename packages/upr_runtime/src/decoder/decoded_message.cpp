@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 
 #include "universal_protocol_runtime/core/compiler_hints.hpp"
 #include "universal_protocol_runtime/decoder/direct_decode_support.hpp"
@@ -56,6 +57,26 @@ constexpr bool validation_operator_matches(CompiledValidationOperator op, uint64
       return lhs >= rhs;
   }
   return false;  // LCOV_EXCL_LINE
+}
+
+constexpr bool checked_add_size(size_t lhs, size_t rhs, size_t* result) noexcept {
+  if (lhs > (std::numeric_limits<size_t>::max() - rhs)) {
+    return false;
+  }
+  *result = lhs + rhs;
+  return true;
+}
+
+constexpr bool checked_mul_size(size_t lhs, size_t rhs, size_t* result) noexcept {
+  if (lhs == 0U || rhs == 0U) {
+    *result = 0U;
+    return true;
+  }
+  if (lhs > (std::numeric_limits<size_t>::max() / rhs)) {
+    return false;
+  }
+  *result = lhs * rhs;
+  return true;
 }
 
 std::optional<size_t> checksum_anchor_offset(
@@ -497,7 +518,14 @@ std::optional<DecodedMessage> DecodedCollectionView::at(size_t index) const {
     return std::nullopt;
   }
   if (element_layout_->has_fixed_size()) {
-    const size_t offset = index * element_layout_->minimum_size();
+    const size_t element_size = element_layout_->minimum_size();
+    if (UPR_UNLIKELY(element_size == 0U)) {
+      return std::nullopt;
+    }
+    size_t offset = 0;
+    if (UPR_UNLIKELY(!checked_mul_size(index, element_size, &offset) || offset > frame_.size())) {
+      return std::nullopt;
+    }
     DecodedMessage element;
     size_t bytes_consumed = 0;
     if (element.assign_from_layout(
@@ -519,7 +547,10 @@ std::optional<DecodedMessage> DecodedCollectionView::at(size_t index) const {
     if (current == index) {
       return element;
     }
-    offset += bytes_consumed;
+    if (UPR_UNLIKELY(bytes_consumed == 0U || !checked_add_size(offset, bytes_consumed, &offset) ||
+                     offset > frame_.size())) {
+      return std::nullopt;
+    }
   }
   return std::nullopt;
 }
@@ -602,7 +633,15 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
       if (count == 0) {
         field_size = 0;
       } else if (element_layout->has_fixed_size()) {
-        field_size = count * element_layout->minimum_size();
+        const size_t element_size = element_layout->minimum_size();
+        if (UPR_UNLIKELY(element_size == 0U)) {
+          return DecodeStatus::kSchemaMismatch;
+        }
+        const size_t remaining_bytes = frame.size() - offset;
+        if (UPR_UNLIKELY(count > (remaining_bytes / element_size))) {
+          return DecodeStatus::kSchemaMismatch;
+        }
+        field_size = count * element_size;
       } else {
         size_t total_size = 0;
         for (size_t index = 0; index < count; ++index) {
@@ -613,7 +652,10 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
           if (status != DecodeStatus::kOk) {
             return status;
           }
-          total_size += bytes_consumed;
+          if (UPR_UNLIKELY(bytes_consumed == 0U || !checked_add_size(total_size, bytes_consumed, &total_size) ||
+                           total_size > (frame.size() - offset))) {
+            return DecodeStatus::kSchemaMismatch;
+          }
         }
         field_size = total_size;
       }
@@ -640,7 +682,8 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
       field_size = bytes_consumed;
     }
 
-    if (UPR_UNLIKELY(offset + field_size > frame.size())) {
+    size_t field_end = 0;
+    if (UPR_UNLIKELY(!checked_add_size(offset, field_size, &field_end) || field_end > frame.size())) {
       return DecodeStatus::kSchemaMismatch;
     }
     candidate.field_present_[field.id] = true;
@@ -672,7 +715,7 @@ DecodeStatus DecodedMessage::assign_from_layout(const CompiledProtocol& protocol
       }
     }
 
-    offset += field_size;
+    offset = field_end;
   }
 
   if (UPR_UNLIKELY(!allow_prefix_trailing && !layout.allow_trailing_bytes() && offset != frame.size())) {

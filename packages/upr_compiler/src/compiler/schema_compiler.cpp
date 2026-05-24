@@ -39,6 +39,18 @@ size_t align_up(size_t value, size_t alignment) {
   return remainder == 0U ? value : (value + (alignment - remainder));
 }
 
+bool checked_mul_size(size_t lhs, size_t rhs, size_t* result) noexcept {
+  if (lhs == 0U || rhs == 0U) {
+    *result = 0U;
+    return true;
+  }
+  if (lhs > (std::numeric_limits<size_t>::max() / rhs)) {
+    return false;
+  }
+  *result = lhs * rhs;
+  return true;
+}
+
 }  // namespace
 
 CompiledMessage::CompiledMessage(std::string name,
@@ -707,6 +719,11 @@ class ProtocolCompiler {
         const CompiledMessage& element_layout = compiled_structs_[compiled_struct_id.value()];
         compiled_field.struct_id = compiled_struct_id.value();
         compiled_field.element_minimum_size = element_layout.minimum_size();
+        if (compiled_field.element_minimum_size == 0U) {
+          return invalid_argument("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                                  std::string(layout.name) +
+                                  "' must reference an element layout with non-zero minimum size.");
+        }
         compiled_field.fixed_count = field.fixed_count;
         if (!field.count_from_field.empty()) {
           const auto it = field_ids.find(field.count_from_field);
@@ -725,7 +742,11 @@ class ProtocolCompiler {
           has_fixed_size = false;
           compiled_field.fixed_size = 0;
         } else {
-          compiled_field.fixed_size = compiled_field.fixed_count * compiled_field.element_minimum_size;
+          if (!checked_mul_size(
+                  compiled_field.fixed_count, compiled_field.element_minimum_size, &compiled_field.fixed_size)) {
+            return exhausted("Collection field '" + field.name + "' in " + std::string(layout.kind_name) + " '" +
+                             std::string(layout.name) + "' exceeds the supported size range.");
+          }
           if (!element_layout.has_fixed_size()) {
             has_fixed_size = false;
           }
@@ -861,8 +882,10 @@ class ProtocolCompiler {
       }
 
       field_ids.emplace(field.name, compiled_field.id);
-      minimum_size = align_up(minimum_size, compiled_field.alignment);
-      minimum_size += compiled_field.minimum_size_contribution();
+      if (!compiled_field.is_conditionally_present()) {
+        minimum_size = align_up(minimum_size, compiled_field.alignment);
+        minimum_size += compiled_field.minimum_size_contribution();
+      }
       if (collecting_dispatch_prefix && compiled_field.is_scalar() && compiled_field.has_expected_unsigned) {
         append_expected_scalar_bytes(
             &dispatch_prefix, compiled_field.expected_unsigned, compiled_field.width_bytes, compiled_field.byte_order);

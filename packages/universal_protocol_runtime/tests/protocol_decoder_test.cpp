@@ -684,6 +684,28 @@ TEST(ProtocolDecoderTest, SupportsPartialDecodeFieldMasks) {
   ASSERT_TRUE(message.get_variant("detail").has_value());
 }
 
+TEST(ProtocolDecoderTest, DecodesFramesWhenAlignedConditionalFieldIsAbsent) {
+  upr::FieldDefinition flags = upr_test_support::make_scalar_field("flags", upr::FieldKind::kUnsigned, 1);
+  upr::FieldDefinition optional_word =
+      upr_test_support::make_scalar_field("optional_word", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::set_presence(&optional_word, "flags", 0);
+  upr_test_support::set_alignment(&optional_word, 8);
+
+  const upr::CompiledProtocol protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
+      "conditional_alignment_decoder",
+      {upr_test_support::make_message(
+          "Packet",
+          {flags, optional_word, upr_test_support::make_scalar_field("tail", upr::FieldKind::kUnsigned, 1)})}));
+
+  upr::ProtocolDecoder decoder(protocol);
+  upr::DecodedMessage message;
+  const auto frame = upr_test_support::make_bytes({0x00, 0x7F});
+  ASSERT_EQ(decoder.decode_as("Packet", upr::ByteSpan(frame.data(), frame.size()), &message), upr::DecodeStatus::kOk);
+  EXPECT_EQ(message.get_unsigned("flags"), 0U);
+  EXPECT_FALSE(message.get_unsigned("optional_word").has_value());
+  EXPECT_EQ(message.get_unsigned("tail"), 0x7FU);
+}
+
 TEST(ProtocolDecoderTest, DecodesVariableLengthAndFixedCountCollections) {
   const upr::CompiledProtocol protocol = upr_test_support::compile_protocol_or_throw(upr_test_support::make_protocol(
       "collection_shapes",
@@ -1051,15 +1073,39 @@ TEST(ProtocolDecoderTest, ManualLayoutsCoverValidationChecksumAndNestedDecodeFai
       2,
       false);
 
+  upr::CompiledMessage zero_item("ZeroItem", {}, {}, {}, 0, true, false);
+  upr::CompiledMessage variable_zero_item("VariableZeroItem", {}, {}, {}, 0, false, false);
+  upr::CompiledField zero_items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 2,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage zero_collection_message("ZeroCollectionMessage", {count, zero_items}, {}, {}, 1, false);
+  upr::CompiledField zero_variable_items{
+      .id = 1,
+      .name = "items",
+      .kind = upr::FieldKind::kCollection,
+      .struct_id = 3,
+      .dynamic_count = true,
+      .count_from_field = 0,
+  };
+  upr::CompiledMessage zero_variable_collection_message(
+      "ZeroVariableCollectionMessage", {count, zero_variable_items}, {}, {}, 1, false);
+
   upr::CompiledProtocol protocol("manual_deep",
                                  77,
-                                 {variable_item, variant_body},
+                                 {variable_item, variant_body, zero_item, variable_zero_item},
                                  {collection_message,
                                   missing_collection_layout,
                                   variant_message,
                                   checksum_message,
                                   skipped_validation,
-                                  invalid_validation});
+                                  invalid_validation,
+                                  zero_collection_message,
+                                  zero_variable_collection_message});
   upr::ProtocolDecoder decoder(protocol);
   upr::DecodedMessage decoded;
 
@@ -1094,6 +1140,16 @@ TEST(ProtocolDecoderTest, ManualLayoutsCoverValidationChecksumAndNestedDecodeFai
                               upr::ByteSpan(invalid_validation_frame.data(), invalid_validation_frame.size()),
                               &decoded),
             upr::DecodeStatus::kInvalidData);
+
+  const auto zero_collection_frame = upr_test_support::make_bytes({0x03});
+  EXPECT_EQ(
+      decoder.decode_as(
+          "ZeroCollectionMessage", upr::ByteSpan(zero_collection_frame.data(), zero_collection_frame.size()), &decoded),
+      upr::DecodeStatus::kSchemaMismatch);
+  EXPECT_EQ(decoder.decode_as("ZeroVariableCollectionMessage",
+                              upr::ByteSpan(zero_collection_frame.data(), zero_collection_frame.size()),
+                              &decoded),
+            upr::DecodeStatus::kSchemaMismatch);
 }
 
 TEST(ProtocolDecoderTest, DecodesManualScalarWidthsAcrossLittleAndBigEndianLayouts) {

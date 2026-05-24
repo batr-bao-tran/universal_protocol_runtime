@@ -16,11 +16,18 @@ namespace hardware_telemetry_example {
 
 namespace upr = universal_protocol_runtime;
 
+/**
+ * @brief Bundles the loaded authoring definition with its compiled runtime form.
+ */
 struct LoadedProtocol {
   upr::ProtocolDefinition definition;
   upr::CompiledProtocol compiled;
 };
 
+/**
+ * @brief Resolves the default hardware-telemetry schema path for local runs and Bazel runfiles.
+ * @return Default schema file path.
+ */
 inline std::filesystem::path default_schema_path() {
   if (const char* runfiles_dir = std::getenv("RUNFILES_DIR")) {
     return std::filesystem::path(runfiles_dir) / "_main" / "examples" / "schema" / "hardware_telemetry.upr";
@@ -31,10 +38,20 @@ inline std::filesystem::path default_schema_path() {
   return std::filesystem::path("examples") / "schema" / "hardware_telemetry.upr";
 }
 
+/**
+ * @brief Resolves the default hardware-telemetry HTML workbench output path.
+ * @return Default workbench file path.
+ */
 inline std::filesystem::path default_workbench_path() {
   return std::filesystem::path("hardware_telemetry_workbench.html");
 }
 
+/**
+ * @brief Loads and compiles the hardware-telemetry schema into a ready-to-use protocol bundle.
+ * @param schema_path Schema file path to load.
+ * @param loaded Destination bundle for authoring and compiled data.
+ * @return `true` when loading and compilation succeed.
+ */
 inline bool load_protocol(const std::filesystem::path& schema_path, LoadedProtocol* loaded) {
   const auto definition = upr::load_protocol_definition_from_file(schema_path.string());
   if (!definition.ok()) {
@@ -51,6 +68,14 @@ inline bool load_protocol(const std::filesystem::path& schema_path, LoadedProtoc
   return true;
 }
 
+/**
+ * @brief Writes a static HTML workbench for the loaded protocol and optional sample frames.
+ * @param path Output HTML file path.
+ * @param title Workbench page title.
+ * @param loaded Loaded authoring and compiled protocol bundle.
+ * @param sample_frames Optional sample frames for inspection and discovery.
+ * @return `true` when the workbench file is written successfully.
+ */
 inline bool write_workbench(const std::filesystem::path& path,
                             std::string title,
                             const LoadedProtocol& loaded,
@@ -78,11 +103,27 @@ inline bool write_workbench(const std::filesystem::path& path,
   return upr::write_workbench_html_file(path.string(), input).ok();
 }
 
+/**
+ * @brief Appends a 16-bit little-endian integer to a byte buffer.
+ * @param bytes Destination byte buffer.
+ * @param value Integer value to append.
+ * @return No return value.
+ */
 inline void append_u16_le(std::vector<std::byte>* bytes, uint16_t value) {
   bytes->push_back(std::byte{static_cast<uint8_t>(value & 0xFFU)});
   bytes->push_back(std::byte{static_cast<uint8_t>((value >> 8U) & 0xFFU)});
 }
 
+/**
+ * @brief Encodes a `SensorPacket` using contiguous or segmented builders.
+ * @param protocol Compiled hardware-telemetry protocol.
+ * @param version Packet version field value.
+ * @param sample_count Number of fixed-width samples represented in the payload.
+ * @param sample_bytes Raw payload bytes to encode.
+ * @param segmented Whether to use the segmented/zero-copy builder path.
+ * @param zero_copy_payload Optional output flag indicating whether payload bytes were attached zero-copy.
+ * @return Encoded packet bytes when encoding succeeds.
+ */
 inline std::optional<std::vector<std::byte>> encode_sensor_packet(const upr::CompiledProtocol& protocol,
                                                                   uint8_t version,
                                                                   uint8_t sample_count,
@@ -155,6 +196,11 @@ inline std::optional<std::vector<std::byte>> encode_sensor_packet(const upr::Com
   return encoded;
 }
 
+/**
+ * @brief Wraps a payload in a 16-bit little-endian length prefix for stream examples.
+ * @param payload Payload bytes to wrap.
+ * @return Framed payload bytes with the length prefix prepended.
+ */
 inline std::vector<std::byte> make_length_prefixed_frame(upr::ByteSpan payload) {
   std::vector<std::byte> framed;
   framed.reserve(payload.size() + 2U);

@@ -16,6 +16,16 @@ namespace upr_test_support {
 
 namespace upr = universal_protocol_runtime;
 
+/**
+ * @brief Builds a scalar field definition for tests.
+ * @param name Field name.
+ * @param kind Scalar field kind.
+ * @param width_bytes Scalar width in bytes.
+ * @param byte_order Field byte order.
+ * @param has_expected_unsigned Whether the field has a fixed expected value.
+ * @param expected_unsigned Expected fixed unsigned value.
+ * @return Test field definition.
+ */
 inline upr::FieldDefinition make_scalar_field(std::string name,
                                               upr::FieldKind kind,
                                               uint8_t width_bytes,
@@ -35,6 +45,16 @@ inline upr::FieldDefinition make_scalar_field(std::string name,
   return field;
 }
 
+/**
+ * @brief Builds an enum field definition for tests.
+ * @param name Field name.
+ * @param width_bytes Enum storage width in bytes.
+ * @param enum_values Enumerators exposed by the field.
+ * @param byte_order Field byte order.
+ * @param has_expected_unsigned Whether the field has a fixed expected value.
+ * @param expected_unsigned Expected fixed unsigned value.
+ * @return Test field definition.
+ */
 inline upr::FieldDefinition make_enum_field(std::string name,
                                             uint8_t width_bytes,
                                             std::vector<upr::EnumValueDefinition> enum_values,
