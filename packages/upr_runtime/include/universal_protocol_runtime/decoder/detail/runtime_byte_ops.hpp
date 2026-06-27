@@ -6,6 +6,29 @@
 
 #include "universal_protocol_runtime/core/byte_view.hpp"
 
+// Scalar-only selection.
+//
+// The runtime validation and checksum helpers below have two implementations:
+//   * An out-of-line SIMD-accelerated definition in runtime_byte_ops.cpp that
+//     links against simdutf, Highway and crc32c.
+//   * A header-only scalar fallback (see direct_decode_support.hpp).
+//
+// A consumer of the *generated* bindings only ever includes headers, so it must
+// be able to compile and link without the SIMD stack. Defining
+// `UPR_RUNTIME_SCALAR_ONLY` forces the header-only scalar path. When the macro
+// is left unset we auto-select: if the SIMD headers are not visible on the
+// include path we fall back to scalar automatically, so the fast path is opt-in
+// rather than mandatory. Define `UPR_RUNTIME_FORCE_SIMD` to require the
+// out-of-line SIMD definitions even when the headers are not directly visible
+// (used by the runtime library translation units themselves).
+#if !defined(UPR_RUNTIME_SCALAR_ONLY) && !defined(UPR_RUNTIME_FORCE_SIMD)
+#if defined(__has_include)
+#if !__has_include("simdutf.h")
+#define UPR_RUNTIME_SCALAR_ONLY 1
+#endif
+#endif
+#endif
+
 namespace universal_protocol_runtime::direct_decode_support::detail {
 
 /**

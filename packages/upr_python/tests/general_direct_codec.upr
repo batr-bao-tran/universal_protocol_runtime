@@ -1,0 +1,43 @@
+protocol general_direct_codec
+
+struct Inner {
+  a: uint16
+  b: uint32
+}
+
+struct Pair {
+  key: uint16
+  value: Inner
+}
+
+struct QuoteDetail {
+  bid: uint32
+  ask: uint32
+}
+
+struct TradeDetail {
+  trade_id: uint64
+}
+
+message Book {
+  message_type: uint8 = 1
+  count: uint8
+  pairs: Pair[count]
+  checksum: uint16 checksum(sum16)
+}
+
+message Event {
+  message_type: uint8 = 2
+  kind: uint8
+  detail: variant(kind) {
+    1 = QuoteDetail,
+    2 = TradeDetail
+  }
+}
+
+message Note {
+  message_type: uint8 = 3
+  presence: uint8
+  note_len: uint8 present(presence, 0)
+  note: utf8[note_len] present(presence, 0)
+}

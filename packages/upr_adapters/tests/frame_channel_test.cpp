@@ -276,6 +276,64 @@ TEST(FrameChannelTest, SendFrameHandlesPartialWritesTimeoutsAndZeroProgressError
   }
 }
 
+TEST(FrameChannelTest, BoundaryPreservingSendFramePropagatesWriteFailures) {
+  constexpr auto kBoundaryCaps = upr::capability_mask(upr::TransportCapability::kPreservesFrameBoundaries);
+  const std::array<std::byte, 2> payload = {std::byte{'o'}, std::byte{'k'}};
+
+  {
+    ScriptedTransport transport(kBoundaryCaps);
+    transport.push_write_step({.bytes_written = 0, .status = upr::io_error("write failed")});
+    upr::FrameChannel channel(transport);
+
+    const upr::Status status = channel.send_frame(upr::ByteSpan(payload.data(), payload.size()));
+
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), upr::StatusCode::kIoError);
+  }
+  {
+    ScriptedTransport transport(kBoundaryCaps);
+    transport.push_write_step({.bytes_written = 0, .would_block = false});
+    upr::FrameChannel channel(transport);
+
+    const upr::Status status = channel.send_frame(upr::ByteSpan(payload.data(), payload.size()));
+
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), upr::StatusCode::kIoError);
+  }
+  {
+    ScriptedTransport transport(kBoundaryCaps);
+    transport.push_write_step({.bytes_written = 1, .would_block = true});
+    transport.set_wait_result(upr::Status::ok_status(), false);
+    upr::FrameChannel channel(transport);
+
+    const upr::Status status = channel.send_frame(upr::ByteSpan(payload.data(), payload.size()));
+
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), upr::StatusCode::kExhausted);
+  }
+  {
+    ScriptedTransport transport(kBoundaryCaps);
+    transport.push_write_step({.bytes_written = 1, .would_block = true});
+    transport.set_wait_result(upr::io_error("wait failed"), false);
+    upr::FrameChannel channel(transport);
+
+    const upr::Status status = channel.send_frame(upr::ByteSpan(payload.data(), payload.size()));
+
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), upr::StatusCode::kIoError);
+  }
+}
+
+TEST(FrameChannelTest, StreamSendFrameHandlesEmptyPayloadSpan) {
+  ScriptedTransport transport;
+  transport.push_writev_step({.bytes_written = 1});
+  upr::FrameChannel channel(transport, {.prefix_width_bytes = 1, .max_frame_size = 8});
+
+  const upr::Status status = channel.send_frame(upr::ByteSpan{});
+
+  EXPECT_TRUE(status.ok()) << status.message();
+}
+
 TEST(FrameChannelTest, BoundaryPreservingPathsPropagateLeaseSemantics) {
   ScriptedTransport transport(upr::capability_mask(upr::TransportCapability::kPreservesFrameBoundaries));
   std::array<std::byte, 3> payload = {std::byte{'x'}, std::byte{'y'}, std::byte{'z'}};
@@ -354,6 +412,45 @@ TEST(FrameChannelTest, StreamReceivePathHandlesWouldBlockEndOfStreamAndCompactio
   upr::StatusOr<upr::TransportBufferLease> lease = channel.try_acquire_frame();
   EXPECT_FALSE(lease.ok());
   EXPECT_EQ(lease.status().code(), upr::StatusCode::kNotFound);
+}
+
+TEST(FrameChannelTest, StreamReceiveTreatsEmptyReadWithoutFlagsAsNeedMoreData) {
+  ScriptedTransport transport;
+  transport.push_read_step({.bytes = {}});
+  upr::FrameChannel channel(transport, {.prefix_width_bytes = 1, .max_frame_size = 8});
+
+  std::vector<std::byte> frame;
+  const upr::FrameChannelPollResult result = channel.receive_frame(&frame);
+
+  EXPECT_EQ(result.status, upr::FrameChannelPollStatus::kNeedMoreData);
+}
+
+TEST(FrameChannelTest, StreamReceiveCompactsWhilePreservingBufferedTail) {
+  ScriptedTransport transport;
+  std::vector<std::byte> combined = {
+      std::byte{1},
+      std::byte{'a'},
+      std::byte{6},
+      std::byte{'b'},
+      std::byte{'c'},
+      std::byte{'d'},
+      std::byte{'e'},
+      std::byte{'f'},
+      std::byte{'g'},
+  };
+  transport.push_read_step({.bytes = combined});
+  upr::FrameChannel channel(transport, {.prefix_width_bytes = 1, .max_frame_size = 8});
+
+  std::vector<std::byte> frame;
+  upr::FrameChannelPollResult first = channel.receive_frame(&frame);
+  ASSERT_EQ(first.status, upr::FrameChannelPollStatus::kFrameReady);
+  ASSERT_EQ(frame.size(), 1U);
+  EXPECT_EQ(frame[0], std::byte{'a'});
+
+  upr::FrameChannelPollResult second = channel.receive_frame(&frame);
+  ASSERT_EQ(second.status, upr::FrameChannelPollStatus::kFrameReady);
+  ASSERT_EQ(frame.size(), 6U);
+  EXPECT_EQ(frame[0], std::byte{'b'});
 }
 
 }  // namespace

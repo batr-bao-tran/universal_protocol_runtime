@@ -425,6 +425,29 @@ inline uint64_t runtime_checksum_crc32(ByteSpan bytes) noexcept { return checksu
 
 inline uint64_t runtime_checksum_crc32c(ByteSpan bytes) noexcept { return detail::runtime_checksum_crc32c(bytes); }
 
+#ifdef UPR_RUNTIME_SCALAR_ONLY
+namespace detail {
+
+// Header-only scalar definitions of the runtime helpers. These satisfy the
+// declarations in runtime_byte_ops.hpp without pulling in simdutf/Highway/crc32c,
+// so generated bindings compile and link with only a C++20 compiler.
+inline bool runtime_is_valid_ascii(ByteSpan bytes) noexcept { return is_valid_ascii_scalar(bytes); }
+
+inline bool runtime_is_valid_utf8(ByteSpan bytes) noexcept {
+  return universal_protocol_runtime::direct_decode_support::is_valid_utf8(bytes);
+}
+
+inline uint8_t runtime_checksum_xor8(ByteSpan bytes) noexcept { return checksum_xor8_scalar(bytes); }
+
+inline uint16_t runtime_checksum_sum16(ByteSpan bytes) noexcept { return checksum_sum16_scalar(bytes); }
+
+inline uint32_t runtime_checksum_crc32c(ByteSpan bytes) noexcept {
+  return static_cast<uint32_t>(universal_protocol_runtime::direct_decode_support::checksum_crc32c(bytes));
+}
+
+}  // namespace detail
+#endif  // UPR_RUNTIME_SCALAR_ONLY
+
 }  // namespace universal_protocol_runtime::direct_decode_support
 
 #endif  // UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_RUNTIME_INCLUDE_UNIVERSAL_PROTOCOL_RUNTIME_DECODER__DIRECT_DECODE_SUPPORT_HPP_
