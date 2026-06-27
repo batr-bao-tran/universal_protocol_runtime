@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
 
 #include "detail/test_support.hpp"
@@ -29,6 +30,7 @@ upr::ProtocolDefinition make_codegen_definition() {
                       "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 1),
                   header,
                   upr_test_support::make_scalar_field("price", upr::FieldKind::kFloat32, 4),
+                  upr_test_support::make_scalar_field("price64", upr::FieldKind::kFloat64, 8),
                   upr_test_support::make_scalar_field("quantity", upr::FieldKind::kUnsigned, 4),
                   upr_test_support::make_enum_field(
                       "side", 1, {{.value = 1, .name = "Buy"}, {.value = 2, .name = "Sell"}}),
@@ -130,6 +132,9 @@ upr::ProtocolDefinition make_advanced_codegen_definition() {
   upr::FieldDefinition revision = upr_test_support::make_scalar_field("revision", upr::FieldKind::kUnsigned, 1);
   upr_test_support::set_condition(&revision, "kind", 2);
 
+  upr::FieldDefinition detail_crc = upr_test_support::make_scalar_field("detail_crc", upr::FieldKind::kUnsigned, 4);
+  upr_test_support::add_checksum(&detail_crc, "crc32");
+
   return upr_test_support::make_protocol(
       "advanced_codegen",
       {upr_test_support::make_message(
@@ -146,7 +151,8 @@ upr::ProtocolDefinition make_advanced_codegen_definition() {
                                                  {.tag_value = 2, .referenced_type = "TradeDetail"}}),
            note_length,
            note,
-           revision})},
+           revision,
+           detail_crc})},
       {upr_test_support::make_struct("Level",
                                      {upr_test_support::make_scalar_field("price", upr::FieldKind::kUnsigned, 2),
                                       upr_test_support::make_scalar_field("qty", upr::FieldKind::kUnsigned, 2)}),
@@ -198,6 +204,69 @@ upr::ProtocolDefinition make_checksum_codegen_definition() {
             crc32c})});
 }
 
+upr::ProtocolDefinition make_simple_direct_exclusion_definition() {
+  upr::FieldDefinition aligned = upr_test_support::make_scalar_field("aligned", upr::FieldKind::kUnsigned, 1);
+  upr_test_support::set_alignment(&aligned, 4);
+
+  return upr_test_support::make_protocol(
+      "simple_direct_exclusion",
+      {
+          upr_test_support::make_message(
+              "Validated",
+              {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)},
+              {upr_test_support::make_validation_against_value("value", upr::ValidationOperator::kEq, 1)}),
+          upr_test_support::make_message(
+              "Aligned", {upr_test_support::make_scalar_field("prefix", upr::FieldKind::kUnsigned, 1), aligned}),
+          upr_test_support::make_message("Reserved",
+                                         {upr_test_support::make_scalar_field("prefix", upr::FieldKind::kUnsigned, 1),
+                                          upr_test_support::make_reserved_field("pad", 2, 0xAA)}),
+      });
+}
+
+upr::ProtocolDefinition make_fallback_all_kinds_codegen_definition() {
+  return upr_test_support::make_protocol(
+      "fallback_all_kinds",
+      {upr_test_support::make_message(
+          "FallbackAllKinds",
+          {
+              upr_test_support::make_scalar_field(
+                  "message_type", upr::FieldKind::kUnsigned, 1, upr::ByteOrder::kLittleEndian, true, 12),
+              upr_test_support::make_scalar_field("validated", upr::FieldKind::kUnsigned, 1),
+              upr_test_support::make_scalar_field("signed_value", upr::FieldKind::kSigned, 2),
+              upr_test_support::make_scalar_field("price32", upr::FieldKind::kFloat32, 4),
+              upr_test_support::make_scalar_field("price64", upr::FieldKind::kFloat64, 8),
+              upr_test_support::make_fixed_bytes_field("raw", 2),
+              upr_test_support::make_string_field("symbol", 3),
+              upr_test_support::make_struct_field("body", "OuterBody"),
+              upr_test_support::make_scalar_field("level_count", upr::FieldKind::kUnsigned, 1),
+              upr_test_support::make_collection_field("levels", "Level", "level_count"),
+              upr_test_support::make_scalar_field("kind", upr::FieldKind::kUnsigned, 1),
+              upr_test_support::make_variant_field("detail",
+                                                   "kind",
+                                                   {{.tag_value = 1, .referenced_type = "QuoteDetail"},
+                                                    {.tag_value = 2, .referenced_type = "TradeDetail"}}),
+          },
+          {upr_test_support::make_validation_against_value("validated", upr::ValidationOperator::kEq, 1)})},
+      {
+          upr_test_support::make_struct("InnerBody",
+                                        {upr_test_support::make_scalar_field("id", upr::FieldKind::kUnsigned, 1)}),
+          upr_test_support::make_struct(
+              "OuterBody",
+              {upr_test_support::make_struct_field("inner", "InnerBody"),
+               upr_test_support::make_scalar_field("body_kind", upr::FieldKind::kUnsigned, 1),
+               upr_test_support::make_variant_field("body_detail",
+                                                    "body_kind",
+                                                    {{.tag_value = 1, .referenced_type = "QuoteDetail"},
+                                                     {.tag_value = 2, .referenced_type = "TradeDetail"}})}),
+          upr_test_support::make_struct("Level",
+                                        {upr_test_support::make_scalar_field("qty", upr::FieldKind::kUnsigned, 1)}),
+          upr_test_support::make_struct("QuoteDetail",
+                                        {upr_test_support::make_scalar_field("bid", upr::FieldKind::kUnsigned, 1)}),
+          upr_test_support::make_struct("TradeDetail",
+                                        {upr_test_support::make_scalar_field("size", upr::FieldKind::kUnsigned, 1)}),
+      });
+}
+
 TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
 
@@ -215,6 +284,7 @@ TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   EXPECT_NE(generated.value().find("class Decoder final {"), std::string::npos);
   EXPECT_NE(generated.value().find("struct Value final {"), std::string::npos);
   EXPECT_NE(generated.value().find("std::optional<float> price() const {"), std::string::npos);
+  EXPECT_NE(generated.value().find("std::optional<double> price64() const {"), std::string::npos);
   EXPECT_NE(generated.value().find("std::optional<uint32_t> quantity() const {"), std::string::npos);
   EXPECT_NE(generated.value().find("std::optional<std::span<const char, 4>> symbol() const {"), std::string::npos);
   EXPECT_NE(generated.value().find("#include \"universal_protocol_runtime/decoder/direct_decode_support.hpp\""),
@@ -225,7 +295,10 @@ TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   EXPECT_NE(generated.value().find("direct_decode_support::starts_with(frame, kDispatchPrefix)"), std::string::npos);
   EXPECT_NE(generated.value().find("direct_decode_support::read_unsigned_scalar<"), std::string::npos);
   EXPECT_NE(generated.value().find("direct_decode_support::runtime_validate_string<"), std::string::npos);
-  EXPECT_NE(generated.value().find("return decode_value_direct(frame, value);"), std::string::npos);
+  EXPECT_NE(generated.value().find("return decode_value_direct(frame, value, nullptr, error);"), std::string::npos);
+  EXPECT_NE(generated.value().find("universal_protocol_runtime::DecodeError* error = nullptr"), std::string::npos);
+  EXPECT_NE(generated.value().find("static universal_protocol_runtime::DecodeStatus decode_sequence("),
+            std::string::npos);
   EXPECT_NE(generated.value().find("return decoder_->decode_as(*layout_, frame, message);"), std::string::npos);
   EXPECT_NE(generated.value().find("universal_protocol_runtime::DecodeStatus decode_value("), std::string::npos);
   EXPECT_NE(generated.value().find("value->quantity = *quantity_value;"), std::string::npos);
@@ -237,21 +310,115 @@ TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   EXPECT_NE(generated.value().find(".algorithm_name = \"xor8\""), std::string::npos);
 }
 
+TEST(BindingsGeneratorTest, SimpleDirectPathExcludesLayoutsWithExtraSemantics) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_simple_direct_exclusion_definition());
+
+  upr::StatusOr<std::string> generated = upr::generate_cpp_bindings_header(compiled);
+
+  ASSERT_TRUE(generated.ok()) << generated.status().message();
+  const std::string& text = generated.value();
+  const std::size_t validated = text.find("struct Validated final {");
+  const std::size_t aligned = text.find("struct Aligned final {");
+  const std::size_t reserved = text.find("struct Reserved final {");
+  ASSERT_NE(validated, std::string::npos);
+  ASSERT_NE(aligned, std::string::npos);
+  ASSERT_NE(reserved, std::string::npos);
+
+  const std::size_t validated_direct =
+      text.find("static constexpr bool kSupportsDirectValueDecode = false;", validated);
+  EXPECT_LT(validated_direct, aligned);
+
+  const std::size_t aligned_direct = text.find("static constexpr bool kSupportsDirectValueDecode = true;", aligned);
+  const std::size_t aligned_align = text.find("const std::size_t aligned_offset", aligned);
+  EXPECT_LT(aligned_direct, reserved);
+  EXPECT_LT(aligned_align, reserved);
+
+  const std::size_t reserved_direct = text.find("static constexpr bool kSupportsDirectValueDecode = true;", reserved);
+  const std::size_t reserved_check = text.find("_reserved_byte", reserved);
+  EXPECT_NE(reserved_direct, std::string::npos);
+  EXPECT_NE(reserved_check, std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, FallbackValueBindingsCoverAllFieldKinds) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_fallback_all_kinds_codegen_definition());
+
+  upr::StatusOr<std::string> cpp_generated = upr::generate_cpp_bindings_header(compiled);
+  upr::StatusOr<std::string> python_generated = upr::generate_python_bindings_module(compiled);
+  upr::StatusOr<std::string> ts_generated = upr::generate_typescript_bindings_module(compiled);
+
+  ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
+  ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
+  ASSERT_TRUE(ts_generated.ok()) << ts_generated.status().message();
+
+  const std::string& cpp = cpp_generated.value();
+  EXPECT_NE(cpp.find("static constexpr bool kSupportsDirectValueDecode = false;"), std::string::npos);
+  EXPECT_NE(cpp.find("int16_t signed_value = 0;"), std::string::npos);
+  EXPECT_NE(cpp.find("float price32 = 0.0;"), std::string::npos);
+  EXPECT_NE(cpp.find("double price64 = 0.0;"), std::string::npos);
+  EXPECT_NE(cpp.find("universal_protocol_runtime::ByteSpan raw;"), std::string::npos);
+  EXPECT_NE(cpp.find("std::string_view symbol;"), std::string::npos);
+  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedMessage body;"), std::string::npos);
+  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedCollectionView levels;"), std::string::npos);
+  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedMessage detail;"), std::string::npos);
+
+  EXPECT_NE(python_generated.value().find("body: Optional[\"OuterBody\"] = None"), std::string::npos);
+  EXPECT_NE(python_generated.value().find("levels: List[\"Level\"] = _field(default_factory=list)"), std::string::npos);
+  EXPECT_NE(ts_generated.value().find("body?: OuterBody;"), std::string::npos);
+  EXPECT_NE(ts_generated.value().find("levels?: Level[];"), std::string::npos);
+}
+
 TEST(BindingsGeneratorTest, GeneratesPythonBindingsWithMetadataClasses) {
   const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
 
   upr::StatusOr<std::string> generated = upr::generate_python_bindings_module(compiled);
 
   ASSERT_TRUE(generated.ok()) << generated.status().message();
-  EXPECT_NE(generated.value().find("from dataclasses import dataclass"), std::string::npos);
+  EXPECT_NE(generated.value().find("from universal_protocol_runtime import Codec as _Codec"), std::string::npos);
+  EXPECT_NE(generated.value().find("from universal_protocol_runtime import metadata as _md"), std::string::npos);
   EXPECT_NE(generated.value().find("PROTOCOL_NAME = \"feeds\""), std::string::npos);
+  EXPECT_NE(generated.value().find("PROTOCOL = _md.Protocol("), std::string::npos);
+  EXPECT_NE(generated.value().find("CODEC = _Codec(PROTOCOL)"), std::string::npos);
+  EXPECT_NE(generated.value().find("@dataclass"), std::string::npos);
   EXPECT_NE(generated.value().find("class Order:"), std::string::npos);
   EXPECT_NE(generated.value().find("class Fields:"), std::string::npos);
   EXPECT_NE(generated.value().find("MESSAGE_TYPE = 0"), std::string::npos);
-  EXPECT_NE(generated.value().find("DISPATCH_PREFIX = b\"\\x01\""), std::string::npos);
-  EXPECT_NE(generated.value().find("FieldBinding(id=2, name=\"price\", kind=\"float32\""), std::string::npos);
-  EXPECT_NE(generated.value().find("ChecksumBinding(field_id=3, result_width_bytes=1, algorithm_name=\"xor8\""),
+  EXPECT_NE(generated.value().find("dispatch_prefix=b\"\\x01\""), std::string::npos);
+  EXPECT_NE(generated.value().find("_md.Field(id=2, name=\"price\", kind=\"float32\""), std::string::npos);
+  EXPECT_NE(generated.value().find("_md.Checksum(field_id=3, result_width_bytes=1, algorithm_name=\"xor8\""),
             std::string::npos);
+  EXPECT_NE(generated.value().find("CODEC.register_dataclass(\"Order\", Order)"), std::string::npos);
+  EXPECT_NE(generated.value().find("def encode(self) -> bytes:"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, GeneratesTypescriptBindingsWithMetadataLiterals) {
+  const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
+
+  upr::StatusOr<std::string> generated = upr::generate_typescript_bindings_module(compiled);
+
+  ASSERT_TRUE(generated.ok()) << generated.status().message();
+  EXPECT_NE(generated.value().find("import { Codec } from \"universal-protocol-runtime\""), std::string::npos);
+  EXPECT_NE(generated.value().find("import type { Protocol } from \"universal-protocol-runtime\""), std::string::npos);
+  EXPECT_NE(generated.value().find("export const PROTOCOL_NAME = \"feeds\""), std::string::npos);
+  EXPECT_NE(generated.value().find("export const PROTOCOL: Protocol = {"), std::string::npos);
+  EXPECT_NE(generated.value().find("export const CODEC = new Codec(PROTOCOL)"), std::string::npos);
+  EXPECT_NE(generated.value().find("export interface Order {"), std::string::npos);
+  EXPECT_NE(generated.value().find("dispatchPrefix: new Uint8Array([0x01])"), std::string::npos);
+  EXPECT_NE(generated.value().find("{ id: 2, name: \"price\", kind: \"float32\""), std::string::npos);
+  EXPECT_NE(generated.value().find("{ fieldId: 3, resultWidthBytes: 1, algorithmName: \"xor8\""), std::string::npos);
+  EXPECT_NE(generated.value().find("encode(value: Order): Uint8Array"), std::string::npos);
+  EXPECT_NE(generated.value().find("decodeSequence(frame: Uint8Array): Order[]"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, SupportsCustomTypescriptRuntimeImport) {
+  const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
+
+  upr::StatusOr<std::string> generated =
+      upr::generate_typescript_bindings_module(compiled, {.runtime_import = "../dist/index.js"});
+
+  ASSERT_TRUE(generated.ok()) << generated.status().message();
+  EXPECT_NE(generated.value().find("import { Codec } from \"../dist/index.js\""), std::string::npos);
 }
 
 TEST(BindingsGeneratorTest, SanitizesIdentifiersForGeneratedBindings) {
@@ -269,9 +436,11 @@ TEST(BindingsGeneratorTest, SanitizesIdentifiersForGeneratedBindings) {
 
   upr::StatusOr<std::string> cpp_generated = upr::generate_cpp_bindings_header(compiled);
   upr::StatusOr<std::string> python_generated = upr::generate_python_bindings_module(compiled);
+  upr::StatusOr<std::string> ts_generated = upr::generate_typescript_bindings_module(compiled);
 
   ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
   ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
+  ASSERT_TRUE(ts_generated.ok()) << ts_generated.status().message();
   EXPECT_NE(cpp_generated.value().find("namespace feed_capture_2 {"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("struct TradeUpdate final {"), std::string::npos);
   EXPECT_NE(python_generated.value().find("class TradeUpdate:"), std::string::npos);
@@ -328,8 +497,9 @@ TEST(BindingsGeneratorTest, SupportsFallbackIdentifiersAndCustomGenerationOption
   EXPECT_NE(python_generated.value().find("module 'custom_module_9'"), std::string::npos);
   EXPECT_NE(python_generated.value().find("class GeneratedBinding:"), std::string::npos);
   EXPECT_NE(python_generated.value().find("UNNAMED = 0"), std::string::npos);
-  EXPECT_NE(python_generated.value().find("DISPATCH_PREFIX = b\"\""), std::string::npos);
-  EXPECT_NE(python_generated.value().find("class BitFields:\n    pass"), std::string::npos);
+  EXPECT_NE(python_generated.value().find("dispatch_prefix=b\"\""), std::string::npos);
+  EXPECT_NE(python_generated.value().find("CODEC.register_dataclass(\"GeneratedBinding\", GeneratedBinding)"),
+            std::string::npos);
 }
 
 TEST(BindingsGeneratorTest, PreservesExplicitValidHeaderGuards) {
@@ -349,9 +519,11 @@ TEST(BindingsGeneratorTest, EmitsEscapedNamesAdditionalFieldKindsAndChecksumAnch
 
   upr::StatusOr<std::string> cpp_generated = upr::generate_cpp_bindings_header(compiled);
   upr::StatusOr<std::string> python_generated = upr::generate_python_bindings_module(compiled);
+  upr::StatusOr<std::string> ts_generated = upr::generate_typescript_bindings_module(compiled);
 
   ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
   ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
+  ASSERT_TRUE(ts_generated.ok()) << ts_generated.status().message();
   EXPECT_NE(cpp_generated.value().find("Escaped\\\"\\n\\r\\t\\\\\\x01"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("field\\\"\\n\\r\\t\\\\\\x01"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("FieldKind::kSigned"), std::string::npos);
@@ -396,24 +568,21 @@ TEST(BindingsGeneratorTest, GeneratesTypedBindingsForDigitPrefixedNamesStructsAn
   EXPECT_NE(cpp_generated.value().find(
                 "std::optional<universal_protocol_runtime::DecodedMessage> generated_7_body() const {"),
             std::string::npos);
+  // Fixed bytes stay as borrowed spans; nested struct fields become owned
+  // values in the general direct path.
   EXPECT_NE(cpp_generated.value().find("universal_protocol_runtime::ByteSpan generated_4_raw_bytes;"),
             std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("universal_protocol_runtime::DecodedMessage generated_7_body;"),
-            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("structs::N1NestedBody::Value generated_7_body;"), std::string::npos);
+  EXPECT_NE(
+      cpp_generated.value().find("value->generated_4_raw_bytes = frame.subspan(offset, generated_4_raw_bytes_size);"),
+      std::string::npos);
   EXPECT_NE(cpp_generated.value().find(
-                "const auto generated_4_raw_bytes_value = source_message->get_fixed_bytes<3>(Fields::kN4RawBytes);"),
+                "structs::N1NestedBody::decode_value_direct(frame.subspan(offset), &value->generated_7_body,"),
             std::string::npos);
-  EXPECT_NE(
-      cpp_generated.value().find(
-          "value->generated_4_raw_bytes = universal_protocol_runtime::ByteSpan(generated_4_raw_bytes_value->data(), "
-          "generated_4_raw_bytes_value->size());"),
-      std::string::npos);
-  EXPECT_NE(
-      cpp_generated.value().find("const auto generated_7_body_value = source_message->get_struct(Fields::kN7Body);"),
-      std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("value->generated_7_body = *generated_7_body_value;"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("structs::N1NestedBody::encode_value_direct(value.generated_7_body,"),
+            std::string::npos);
   EXPECT_NE(cpp_generated.value().find("FieldKind::kStruct"), std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = false;"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = true;"), std::string::npos);
 
   EXPECT_NE(python_generated.value().find("class N123Snapshot:"), std::string::npos);
   EXPECT_NE(python_generated.value().find("N_4_RAW_BYTES = 2"), std::string::npos);
@@ -425,25 +594,38 @@ TEST(BindingsGeneratorTest, GeneratesBindingsForCollectionsVariantsAndConditiona
 
   upr::StatusOr<std::string> cpp_generated = upr::generate_cpp_bindings_header(compiled);
   upr::StatusOr<std::string> python_generated = upr::generate_python_bindings_module(compiled);
+  upr::StatusOr<std::string> ts_generated = upr::generate_typescript_bindings_module(compiled);
 
   ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
   ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
+  ASSERT_TRUE(ts_generated.ok()) << ts_generated.status().message();
 
   EXPECT_NE(cpp_generated.value().find("FieldKind::kCollection"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("FieldKind::kVariant"), std::string::npos);
+  // Borrowed View accessors are unchanged.
   EXPECT_NE(
       cpp_generated.value().find("std::optional<universal_protocol_runtime::DecodedCollectionView> levels() const"),
       std::string::npos);
   EXPECT_NE(cpp_generated.value().find("std::optional<universal_protocol_runtime::DecodedMessage> detail() const"),
             std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("universal_protocol_runtime::DecodedCollectionView levels;"), std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("const auto levels_value = source_message->get_collection(Fields::kLevels);"),
+  // The general direct path materializes owned collections and variants.
+  EXPECT_NE(cpp_generated.value().find("std::vector<structs::Level::Value> levels;"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find(
+                "std::variant<std::monostate, structs::QuoteDetail::Value, structs::TradeDetail::Value> detail;"),
             std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("const auto detail_value = source_message->get_variant(Fields::kDetail);"),
+  EXPECT_NE(cpp_generated.value().find("value->levels.push_back(std::move(levels_element));"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("structs::Level::decode_value_direct(frame.subspan(offset),"),
             std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = false;"), std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("value->detail.emplace<1>("), std::string::npos);
+  // Presence- and condition-gated fields are emitted inline.
+  EXPECT_NE(cpp_generated.value().find("const bool note_present = (((static_cast<uint64_t>(value->presence)"),
+            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("const bool revision_present = (static_cast<uint64_t>(value->kind) == 2ULL)"),
+            std::string::npos);
+  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = true;"), std::string::npos);
   EXPECT_NE(python_generated.value().find("kind=\"collection\""), std::string::npos);
   EXPECT_NE(python_generated.value().find("kind=\"variant\""), std::string::npos);
+  EXPECT_NE(ts_generated.value().find("detail?: QuoteDetail | TradeDetail;"), std::string::npos);
 }
 
 TEST(BindingsGeneratorTest, GeneratesChecksumHelpersForBuiltInAlgorithms) {

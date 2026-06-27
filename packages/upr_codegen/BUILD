@@ -24,3 +24,10 @@ cc_binary(
         "//packages/upr_compiler",
     ],
 )
+
+# Stable, multi-language entry point: `bazel run //packages/upr_codegen:upr-gen --
+# --lang {cpp,python} --input schema.upr --output out`.
+alias(
+    name = "upr-gen",
+    actual = ":generate_bindings",
+)
