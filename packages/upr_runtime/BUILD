@@ -27,6 +27,63 @@ cc_library(
     ],
 )
 
+# Header-only view of the direct encode/decode support headers. Consumers of
+# generated bindings can depend on this target (plus -DUPR_RUNTIME_SCALAR_ONLY)
+# to get the fast paths without linking simdutf / Highway / crc32c.
+cc_library(
+    name = "upr_runtime_scalar_headers",
+    hdrs = [
+        "include/universal_protocol_runtime/decoder/detail/runtime_byte_ops.hpp",
+        "include/universal_protocol_runtime/decoder/direct_decode_support.hpp",
+        "include/universal_protocol_runtime/encoder/direct_encode_support.hpp",
+        "include/universal_protocol_runtime/encoder/encode_status.hpp",
+    ],
+    includes = ["include"],
+    deps = [
+        "//packages/upr_core",
+    ],
+)
+
+cc_test(
+    name = "scalar_only_runtime_test",
+    size = "small",
+    srcs = ["tests/scalar_only_runtime_test.cpp"],
+    local_defines = ["UPR_RUNTIME_SCALAR_ONLY=1"],
+    deps = [
+        ":upr_runtime_scalar_headers",
+        "@googletest//:gtest_main",
+    ],
+)
+
+genrule(
+    name = "general_direct_codec_generated",
+    srcs = ["tests/general_direct_codec.upr"],
+    outs = ["tests/upr_general_direct_generated.hpp"],
+    cmd = "$(location //packages/upr_codegen:generate_bindings)" +
+          " --input $(location tests/general_direct_codec.upr)" +
+          " --output $@" +
+          " --namespace-prefix universal_protocol_runtime" +
+          " --protocol-namespace gdc" +
+          " --header-guard UNIVERSAL_PROTOCOL_RUNTIME__PACKAGES_UPR_RUNTIME_TESTS__UPR_GENERAL_DIRECT_GENERATED_HPP_",
+    tools = ["//packages/upr_codegen:generate_bindings"],
+)
+
+cc_test(
+    name = "general_direct_codec_test",
+    size = "small",
+    srcs = [
+        "tests/general_direct_codec_test.cpp",
+        ":general_direct_codec_generated",
+    ],
+    data = ["tests/general_direct_codec.upr"],
+    deps = [
+        ":upr_runtime",
+        "//packages/upr_authoring",
+        "//packages/upr_compiler",
+        "@googletest//:gtest_main",
+    ],
+)
+
 proto_library(
     name = "benchmark_messages_proto",
     srcs = ["benchmarks/benchmark_messages.proto"],

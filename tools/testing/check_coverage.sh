@@ -8,6 +8,9 @@ readonly COVERAGE_TARGETS="//..."
 readonly COVERAGE_FILTER='^//'
 readonly BASELINE_REPORT_SUFFIX="/_coverage/_baseline_report.dat"
 readonly COVERAGE_REPORT_SUFFIX="/_coverage/_coverage_report.dat"
+readonly COVERAGE_OUTPUT_DIR="coverage"
+readonly PYTHON_COVERAGE_REPORT="${COVERAGE_OUTPUT_DIR}/upr_python.lcov"
+readonly TYPESCRIPT_COVERAGE_REPORT="packages/upr_typescript/coverage/lcov.info"
 
 threshold_percent="${1:-$DEFAULT_THRESHOLD_PERCENT}"
 report_path="${2:-}"
@@ -21,23 +24,42 @@ bazel_cmd() {
   USE_BAZEL_VERSION="${bazel_version}" bazel "$@"
 }
 
+validate_report() {
+  local path="$1"
+  if [[ ! -f "${path}" ]]; then
+    printf 'Coverage report not found at %s\n' "${path}" >&2
+    exit 1
+  fi
+  if [[ "${path}" == *"${BASELINE_REPORT_SUFFIX}" ]]; then
+    printf 'Refusing to read baseline coverage report: %s\n' "${path}" >&2
+    printf 'Use the merged coverage report instead: %s\n' "$(bazel_cmd info output_path)${COVERAGE_REPORT_SUFFIX}" >&2
+    exit 1
+  fi
+}
+
+coverage_reports=()
+
 if [[ -z "${report_path}" ]]; then
+  mkdir -p "${COVERAGE_OUTPUT_DIR}"
+
   bazel_cmd coverage "${COVERAGE_TARGETS}" \
     --combined_report=lcov \
     --instrumentation_filter="${COVERAGE_FILTER}"
-  report_path="$(bazel_cmd info output_path)${COVERAGE_REPORT_SUFFIX}"
+  coverage_reports+=("$(bazel_cmd info output_path)${COVERAGE_REPORT_SUFFIX}")
+
+  bazel_cmd run //packages/upr_python/tests:python_codec_coverage -- \
+    --lcov "$(pwd)/${PYTHON_COVERAGE_REPORT}"
+  coverage_reports+=("${PYTHON_COVERAGE_REPORT}")
+
+  (cd packages/upr_typescript && npm run coverage)
+  coverage_reports+=("${TYPESCRIPT_COVERAGE_REPORT}")
+else
+  coverage_reports+=("${report_path}")
 fi
 
-if [[ ! -f "${report_path}" ]]; then
-  printf 'Coverage report not found at %s\n' "${report_path}" >&2
-  exit 1
-fi
-
-if [[ "${report_path}" == *"${BASELINE_REPORT_SUFFIX}" ]]; then
-  printf 'Refusing to read baseline coverage report: %s\n' "${report_path}" >&2
-  printf 'Use the merged coverage report instead: %s\n' "$(bazel_cmd info output_path)${COVERAGE_REPORT_SUFFIX}" >&2
-  exit 1
-fi
+for coverage_report in "${coverage_reports[@]}"; do
+  validate_report "${coverage_report}"
+done
 
 coverage_summary="$(
   awk '
@@ -62,16 +84,18 @@ coverage_summary="$(
       }
       printf "%d %d %.2f", covered_lines, total_lines, (100.0 * covered_lines / total_lines)
     }
-  ' "${report_path}"
+  ' "${coverage_reports[@]}"
 )"
 
 read -r covered_lines total_lines coverage_percent <<<"${coverage_summary}"
 
 if [[ "${total_lines}" == "0" ]]; then
-  printf 'Coverage report contains zero instrumented lines: %s\n' "${report_path}" >&2
+  printf 'Coverage reports contain zero instrumented lines\n' >&2
   exit 1
 fi
 
+printf 'Coverage reports:\n'
+printf '  %s\n' "${coverage_reports[@]}"
 printf 'Overall coverage: %s%% (%s/%s lines)\n' \
   "${coverage_percent}" \
   "${covered_lines}" \

@@ -25,6 +25,15 @@ struct PythonBindingsOptions {
 };
 
 /**
+ * @brief Configuration for generated TypeScript bindings.
+ */
+struct TypescriptBindingsOptions {
+  // Module specifier the generated code imports the runtime from. Defaults to
+  // the published npm package name.
+  std::string runtime_import = "universal-protocol-runtime";
+};
+
+/**
  * @brief Generates a C++ header with bindings for a compiled protocol.
  * @param protocol Compiled protocol metadata to emit.
  * @param options Code generation options for namespaces and guards.
@@ -41,6 +50,15 @@ StatusOr<std::string> generate_cpp_bindings_header(const CompiledProtocol& proto
  */
 StatusOr<std::string> generate_python_bindings_module(const CompiledProtocol& protocol,
                                                       const PythonBindingsOptions& options = {});
+
+/**
+ * @brief Generates a TypeScript module with bindings for a compiled protocol.
+ * @param protocol Compiled protocol metadata to emit.
+ * @param options Code generation options for the TypeScript module.
+ * @return Generated TypeScript source text on success.
+ */
+StatusOr<std::string> generate_typescript_bindings_module(const CompiledProtocol& protocol,
+                                                          const TypescriptBindingsOptions& options = {});
 
 }  // namespace universal_protocol_runtime
 
