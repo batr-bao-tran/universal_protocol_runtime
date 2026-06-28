@@ -10,18 +10,28 @@ from typing import Callable, Dict, Union
 
 BytesLike = Union[bytes, bytearray, memoryview]
 
+_BYTE_VALUE_COUNT = 256
+_BITS_PER_BYTE = 8
+_LOW_BIT_MASK = 1
+_BYTE_MASK = 0xFF
+_UINT16_MASK = 0xFFFF
+_UINT32_MASK = 0xFFFFFFFF
 _CRC16_CCITT_POLY = 0x8408
 _CRC32_POLY = 0xEDB88320
 _CRC32C_POLY = 0x82F63B78
+_CRC16_CCITT_INITIAL = _UINT16_MASK
+_CRC32_INITIAL = _UINT32_MASK
+_CRC16_WIDTH_BITS = 16
+_CRC32_WIDTH_BITS = 32
 
 
 def _make_crc_table(poly: int, width_bits: int) -> list[int]:
     mask = (1 << width_bits) - 1
     table: list[int] = []
-    for index in range(256):
+    for index in range(_BYTE_VALUE_COUNT):
         crc = index
-        for _ in range(8):
-            if crc & 1:
+        for _ in range(_BITS_PER_BYTE):
+            if crc & _LOW_BIT_MASK:
                 crc = (crc >> 1) ^ poly
             else:
                 crc >>= 1
@@ -29,9 +39,9 @@ def _make_crc_table(poly: int, width_bits: int) -> list[int]:
     return table
 
 
-_CRC16_CCITT_TABLE = _make_crc_table(_CRC16_CCITT_POLY, 16)
-_CRC32_TABLE = _make_crc_table(_CRC32_POLY, 32)
-_CRC32C_TABLE = _make_crc_table(_CRC32C_POLY, 32)
+_CRC16_CCITT_TABLE = _make_crc_table(_CRC16_CCITT_POLY, _CRC16_WIDTH_BITS)
+_CRC32_TABLE = _make_crc_table(_CRC32_POLY, _CRC32_WIDTH_BITS)
+_CRC32C_TABLE = _make_crc_table(_CRC32C_POLY, _CRC32_WIDTH_BITS)
 
 
 def xor8(data: BytesLike) -> int:
@@ -39,36 +49,36 @@ def xor8(data: BytesLike) -> int:
     value = 0
     for byte in data:
         value ^= byte
-    return value & 0xFF
+    return value & _BYTE_MASK
 
 
 def sum16(data: BytesLike) -> int:
     """Computes the 16-bit additive checksum."""
-    return sum(data) & 0xFFFF
+    return sum(data) & _UINT16_MASK
 
 
 def crc16_ccitt(data: BytesLike) -> int:
     """Computes the reflected CRC-16/CCITT checksum (init 0xFFFF, xorout 0xFFFF)."""
-    crc = 0xFFFF
+    crc = _CRC16_CCITT_INITIAL
     for byte in data:
-        crc = ((crc >> 8) ^ _CRC16_CCITT_TABLE[(crc ^ byte) & 0xFF]) & 0xFFFF
-    return (~crc) & 0xFFFF
+        crc = ((crc >> _BITS_PER_BYTE) ^ _CRC16_CCITT_TABLE[(crc ^ byte) & _BYTE_MASK]) & _UINT16_MASK
+    return (~crc) & _UINT16_MASK
 
 
 def crc32(data: BytesLike) -> int:
     """Computes the standard (zlib) CRC-32 checksum."""
-    crc = 0xFFFFFFFF
+    crc = _CRC32_INITIAL
     for byte in data:
-        crc = (crc >> 8) ^ _CRC32_TABLE[(crc ^ byte) & 0xFF]
-    return (~crc) & 0xFFFFFFFF
+        crc = (crc >> _BITS_PER_BYTE) ^ _CRC32_TABLE[(crc ^ byte) & _BYTE_MASK]
+    return (~crc) & _UINT32_MASK
 
 
 def crc32c(data: BytesLike) -> int:
     """Computes the CRC-32C (Castagnoli) checksum."""
-    crc = 0xFFFFFFFF
+    crc = _CRC32_INITIAL
     for byte in data:
-        crc = (crc >> 8) ^ _CRC32C_TABLE[(crc ^ byte) & 0xFF]
-    return (~crc) & 0xFFFFFFFF
+        crc = (crc >> _BITS_PER_BYTE) ^ _CRC32C_TABLE[(crc ^ byte) & _BYTE_MASK]
+    return (~crc) & _UINT32_MASK
 
 
 BUILTIN_ALGORITHMS: Dict[str, Callable[[BytesLike], int]] = {

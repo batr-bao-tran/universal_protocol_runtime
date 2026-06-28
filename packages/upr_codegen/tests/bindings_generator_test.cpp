@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "detail/test_support.hpp"
 
@@ -379,7 +380,9 @@ TEST(BindingsGeneratorTest, GeneratesPythonBindingsWithMetadataClasses) {
   EXPECT_NE(generated.value().find("from universal_protocol_runtime import metadata as _md"), std::string::npos);
   EXPECT_NE(generated.value().find("PROTOCOL_NAME = \"feeds\""), std::string::npos);
   EXPECT_NE(generated.value().find("PROTOCOL = _md.Protocol("), std::string::npos);
-  EXPECT_NE(generated.value().find("CODEC = _Codec(PROTOCOL)"), std::string::npos);
+  EXPECT_NE(generated.value().find("import _feeds_native as _native"), std::string::npos);
+  EXPECT_NE(generated.value().find("class _NativeCodec(_Codec):"), std::string::npos);
+  EXPECT_NE(generated.value().find("CODEC = _NativeCodec(PROTOCOL)"), std::string::npos);
   EXPECT_NE(generated.value().find("@dataclass"), std::string::npos);
   EXPECT_NE(generated.value().find("class Order:"), std::string::npos);
   EXPECT_NE(generated.value().find("class Fields:"), std::string::npos);
@@ -482,7 +485,12 @@ TEST(BindingsGeneratorTest, SupportsFallbackIdentifiersAndCustomGenerationOption
                                                                                    .header_guard = "***",
                                                                                });
   upr::StatusOr<std::string> python_generated =
-      upr::generate_python_bindings_module(compiled, {.module_name = "Custom Module 9"});
+      upr::generate_python_bindings_module(compiled,
+                                           {
+                                               .module_name = "Custom Module 9",
+                                               .native_module_name = "",
+                                               .native_header_include = "",
+                                           });
 
   ASSERT_TRUE(cpp_generated.ok()) << cpp_generated.status().message();
   ASSERT_TRUE(python_generated.ok()) << python_generated.status().message();
@@ -626,6 +634,97 @@ TEST(BindingsGeneratorTest, GeneratesBindingsForCollectionsVariantsAndConditiona
   EXPECT_NE(python_generated.value().find("kind=\"collection\""), std::string::npos);
   EXPECT_NE(python_generated.value().find("kind=\"variant\""), std::string::npos);
   EXPECT_NE(ts_generated.value().find("detail?: QuoteDetail | TradeDetail;"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, GeneratesPythonNativeExtensionModuleAcrossProtocolShapes) {
+  const std::vector<upr::ProtocolDefinition> definitions = {
+      make_codegen_definition(),
+      make_numeric_codegen_definition(),
+      make_advanced_codegen_definition(),
+      make_checksum_codegen_definition(),
+      make_fallback_all_kinds_codegen_definition(),
+  };
+
+  for (const upr::ProtocolDefinition& definition : definitions) {
+    const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(definition);
+
+    upr::StatusOr<std::string> native = upr::generate_python_native_extension_module(compiled);
+
+    ASSERT_TRUE(native.ok()) << native.status().message();
+    const std::string& text = native.value();
+    EXPECT_NE(text.find("#include <pybind11/pybind11.h>"), std::string::npos);
+    EXPECT_NE(text.find("std::optional<universal_protocol_runtime::ByteSpan> buffer_span("), std::string::npos);
+    EXPECT_NE(text.find("py::object encode(std::string_view name, py::object values) {"), std::string::npos);
+    EXPECT_NE(text.find("py::object decode(std::string_view name, PyObject* frame) {"), std::string::npos);
+    EXPECT_NE(text.find("py::object decode_sequence(std::string_view name, PyObject* frame) {"), std::string::npos);
+    EXPECT_NE(text.find("PyMethodDef kMethods[] = {"), std::string::npos);
+    EXPECT_NE(text.find("set_encode_error(\"layout not found\");"), std::string::npos);
+    EXPECT_NE(text.find("set_decode_status(universal_protocol_runtime::DecodeStatus::kMessageNotFound);"),
+              std::string::npos);
+  }
+}
+
+TEST(BindingsGeneratorTest, NativeExtensionEmitsConvertersForEveryFieldKind) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_fallback_all_kinds_codegen_definition());
+
+  upr::StatusOr<std::string> native = upr::generate_python_native_extension_module(compiled);
+
+  ASSERT_TRUE(native.ok()) << native.status().message();
+  const std::string& text = native.value();
+  EXPECT_NE(text.find("PYBIND11_MODULE(_fallback_all_kinds_native, m)"), std::string::npos);
+  // Scalars cast straight from the Python object and back via py::cast.
+  EXPECT_NE(text.find("value.signed_value = signed_value_object.cast<int16_t>();"), std::string::npos);
+  EXPECT_NE(text.find("result[\"signed_value\"] = py::cast(value.signed_value);"), std::string::npos);
+  // Bytes and strings borrow into the storage deque and re-materialize as py::bytes / py::str.
+  EXPECT_NE(text.find("storage.emplace_back(py::bytes(raw_object));"), std::string::npos);
+  EXPECT_NE(text.find("result[\"raw\"] = py::bytes(reinterpret_cast<const char*>(value.raw"), std::string::npos);
+  EXPECT_NE(text.find("storage.emplace_back(py::str(symbol_object));"), std::string::npos);
+  EXPECT_NE(text.find("result[\"symbol\"] = py::str(std::string(value.symbol"), std::string::npos);
+  // Nested structs recurse through the dedicated converters (names are lower-cased, joined identifiers).
+  EXPECT_NE(text.find("value.body = value_from_py_outerbody(body_object, storage);"), std::string::npos);
+  EXPECT_NE(text.find("result[\"body\"] = value_to_py_outerbody(value.body);"), std::string::npos);
+  // Collections iterate the Python sequence and rebuild a py::list.
+  EXPECT_NE(text.find(".push_back(value_from_py_level("), std::string::npos);
+  EXPECT_NE(text.find("levels_items.append(value_to_py_level(item));"), std::string::npos);
+  // Variants dispatch on the tag field and emplace the active alternative.
+  EXPECT_NE(text.find("switch (static_cast<uint64_t>(value.kind)) {"), std::string::npos);
+  EXPECT_NE(text.find(".emplace<1>(value_from_py_quotedetail("), std::string::npos);
+  EXPECT_NE(text.find("result[\"detail\"] = value_to_py_quotedetail(std::get<1>(value.detail));"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, NativeExtensionDerivesLengthsCountsAndGatesPresence) {
+  const upr::CompiledProtocol compiled =
+      upr_test_support::compile_protocol_or_throw(make_advanced_codegen_definition());
+
+  upr::StatusOr<std::string> native = upr::generate_python_native_extension_module(compiled);
+
+  ASSERT_TRUE(native.ok()) << native.status().message();
+  const std::string& text = native.value();
+  // Length and count fields are derived from the payload sizes on the way in.
+  EXPECT_NE(text.find("value.note_len = static_cast<decltype(value.note_len)>(value.note.size());"), std::string::npos);
+  EXPECT_NE(text.find("value.level_count = static_cast<decltype(value.level_count)>(value.levels.size());"),
+            std::string::npos);
+  // Presence- and condition-gated fields are only converted back to Python when present.
+  EXPECT_NE(text.find("static_cast<uint64_t>(value.presence)"), std::string::npos);
+  EXPECT_NE(text.find("static_cast<uint64_t>(value.kind) == 2ULL"), std::string::npos);
+  // The dispatch table routes by message name into the generated layout.
+  EXPECT_NE(text.find("if (name == \"Snapshot\") {"), std::string::npos);
+  EXPECT_NE(text.find("encode_layout<gen::messages::Snapshot>("), std::string::npos);
+  EXPECT_NE(text.find("case 1ULL:"), std::string::npos);
+}
+
+TEST(BindingsGeneratorTest, NativeExtensionHonoursCustomModuleAndHeaderOptions) {
+  const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(make_codegen_definition());
+
+  upr::PythonBindingsOptions options;
+  options.native_module_name = "custom native 7";
+  options.native_header_include = "some/dir/custom_codec.hpp";
+  upr::StatusOr<std::string> native = upr::generate_python_native_extension_module(compiled, options);
+
+  ASSERT_TRUE(native.ok()) << native.status().message();
+  EXPECT_NE(native.value().find("PYBIND11_MODULE(custom_native_7, m)"), std::string::npos);
+  EXPECT_NE(native.value().find("#include \"some/dir/custom_codec.hpp\""), std::string::npos);
 }
 
 TEST(BindingsGeneratorTest, GeneratesChecksumHelpersForBuiltInAlgorithms) {

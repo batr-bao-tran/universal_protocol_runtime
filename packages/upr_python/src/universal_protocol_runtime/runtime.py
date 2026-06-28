@@ -1,32 +1,34 @@
-"""High-level codec facade used by generated protocol modules."""
+"""High-level codec facade for runtime schemas and generated Python modules."""
 
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Mapping, Optional, Type
+from typing import Callable, Dict, List, Mapping
 
 from . import codec as _codec
 from .errors import DecodeError, DecodeStatus, EncodeError
 from .metadata import Layout, Protocol
 
+_DataclassFactory = Callable[..., object]
+
 
 class Codec:
     """Encodes/decodes any message in a protocol by name.
 
-    The dict-based methods (:meth:`encode`, :meth:`decode`,
-    :meth:`decode_sequence`) are the dependency-free core. Generated modules can
-    additionally register typed dataclasses to get :meth:`decode_typed`.
+    Runtime-provided schemas use the pure Python codec underneath. Generated
+    protocol modules subclass this facade and delegate encode/decode to their
+    native extension while reusing typed dataclass reconstruction.
     """
 
     def __init__(self, protocol: Protocol) -> None:
         self._protocol = protocol
-        self._dataclass_by_layout: Dict[str, Type[Any]] = {}
+        self._dataclass_by_layout: Dict[str, _DataclassFactory] = {}
 
     @property
     def protocol(self) -> Protocol:
         return self._protocol
 
-    def register_dataclass(self, layout_name: str, cls: Type[Any]) -> None:
+    def register_dataclass(self, layout_name: str, cls: _DataclassFactory) -> None:
         """Associates a dataclass with a layout name for typed decoding."""
         self._dataclass_by_layout[layout_name] = cls
 
@@ -41,30 +43,34 @@ class Codec:
             raise DecodeError(DecodeStatus.MESSAGE_NOT_FOUND, "", 0)
         return layout
 
-    def encode(self, name: str, values: Mapping[str, Any]) -> bytes:
+    def encode(self, name: str, values: object) -> bytes:
         """Encodes a mapping (or dataclass) into a frame."""
         if dataclasses.is_dataclass(values) and not isinstance(values, type):
-            values = dataclasses.asdict(values)
+            values = {field.name: getattr(values, field.name) for field in dataclasses.fields(values)}
+        if not isinstance(values, Mapping):
+            raise EncodeError("expected mapping or dataclass", name)
         return _codec.encode(self._protocol, self._layout(name, for_encode=True), values)
 
-    def decode(self, name: str, frame: bytes) -> Dict[str, Any]:
+    def decode(self, name: str, frame: _codec.BytesLike, *, zero_copy: bool = False) -> _codec.DecodedMapping:
         """Decodes one frame into a mapping of field values."""
-        return _codec.decode(self._protocol, self._layout(name), frame)
+        return _codec.decode(self._protocol, self._layout(name), frame, zero_copy=zero_copy)
 
-    def decode_sequence(self, name: str, frame: bytes) -> List[Dict[str, Any]]:
+    def decode_sequence(
+        self, name: str, frame: _codec.BytesLike, *, zero_copy: bool = False
+    ) -> List[_codec.DecodedMapping]:
         """Decodes a packed sequence of records into a list of mappings."""
-        return _codec.decode_sequence(self._protocol, self._layout(name), frame)
+        return _codec.decode_sequence(self._protocol, self._layout(name), frame, zero_copy=zero_copy)
 
-    def decode_typed(self, name: str, frame: bytes) -> Any:
+    def decode_typed(self, name: str, frame: _codec.BytesLike) -> object:
         """Decodes one frame into the registered dataclass instance."""
         mapping = self.decode(name, frame)
         return self._to_instance(self._layout(name), mapping)
 
-    def _to_instance(self, layout: Layout, mapping: Mapping[str, Any]) -> Any:
+    def _to_instance(self, layout: Layout, mapping: Mapping[str, object]) -> object:
         cls = self._dataclass_by_layout.get(layout.name)
         if cls is None:
             return dict(mapping)
-        kwargs: Dict[str, Any] = {}
+        kwargs: Dict[str, object] = {}
         for fld in layout.fields:
             if fld.name not in mapping:
                 continue

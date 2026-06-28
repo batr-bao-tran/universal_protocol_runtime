@@ -7,10 +7,10 @@ runtimes.
 
 * Zero runtime dependencies — uses only built-in `Uint8Array`, `DataView`,
   `TextEncoder`/`TextDecoder` and `BigInt`.
-* Byte-compatible with the C++ direct codec and the Python codec (scalars,
-  signed, floats, bytes, strings, structs, collections, tagged variants,
-  presence/condition-gated optionals, reserved fills, expected constants and the
-  built-in checksums `xor8`, `sum16`, `crc16_ccitt`, `crc32`, `crc32c`).
+* Byte-compatible with the C++ and Python runtimes (scalars, signed, floats,
+  bytes, strings, structs, collections, tagged variants, presence/condition-gated
+  optionals, reserved fills, expected constants and the built-in checksums
+  `xor8`, `sum16`, `crc16_ccitt`, `crc32`, `crc32c`).
 * Rich `DecodeError` carrying the failing field path and byte offset.
 * Length-prefixed framing and the `UPR1` session handshake.
 * Ships as ESM with `.d.ts` typings. Sources use standard NodeNext `.js`

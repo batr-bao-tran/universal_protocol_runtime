@@ -1,9 +1,7 @@
-"""Schema descriptor dataclasses driving the pure-Python codec.
+"""Schema descriptor dataclasses for Python runtime schemas and facades.
 
-Generated protocol modules instantiate these descriptors. The codec walks them
-to encode/decode frames, so they capture every wire-relevant property of a
-compiled field (alignment, presence/condition gating, collections, variants,
-checksums, ...).
+The pure Python codec walks these descriptors for dynamic runtime schemas.
+Generated protocol modules also expose them as metadata beside the native codec.
 """
 
 from __future__ import annotations
