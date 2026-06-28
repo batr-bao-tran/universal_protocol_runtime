@@ -17,9 +17,8 @@
 
 import * as checksums from "./checksums.js";
 import { DecodeError, EncodeError } from "./errors.js";
-import type { Checksum, ChecksumAnchor, Field, Layout, Protocol } from "./metadata.js";
+import type { ChecksumAnchor, Field, Layout, Protocol } from "./metadata.js";
 import { isGated } from "./metadata.js";
-import { TextDecoder, TextEncoder } from "node:util";
 
 const SCALAR_KINDS = new Set(["unsigned", "signed", "float32", "float64", "enum"]);
 const BYTE_MASK_BIGINT = 0xffn;

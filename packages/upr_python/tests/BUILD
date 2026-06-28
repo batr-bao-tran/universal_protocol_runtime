@@ -45,6 +45,12 @@ py_test(
     ],
     imports = ["."],
     main = "python_codec_test.py",
+    # The pybind11 extension is built with -fsanitize=address under the
+    # sanitize config, but it is dlopen'd into a non-instrumented Python
+    # interpreter that never links the ASan runtime. The underlying C++
+    # runtime is already covered by the C++ sanitizer tests, so the sanitizer
+    # suite skips targets tagged "no-sanitize".
+    tags = ["no-sanitize"],
     deps = [
         ":_general_direct_codec_native",
         "//packages/upr_python:universal_protocol_runtime",
@@ -61,6 +67,9 @@ py_binary(
     ],
     imports = ["."],
     main = "python_coverage_main.py",
+    # Must match python_codec_test's tags so the shared PyCompile action for the
+    # common .py sources stays a single action.
+    tags = ["no-sanitize"],
     deps = [
         ":_general_direct_codec_native",
         "//packages/upr_python:universal_protocol_runtime",
