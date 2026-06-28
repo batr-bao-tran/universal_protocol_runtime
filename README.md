@@ -11,14 +11,14 @@ Universal Protocol Runtime (UPR) is a C++20 library for describing binary protoc
 - Model real protocol shapes such as repeating groups, tagged variants, presence-gated optionals, reserved gaps, and validation rules.
 - Use partial decode and segmented encode paths when only selected fields or zero-copy payload attachment matter.
 - Keep transport, framing, schema loading, compilation, and decoding as separate concerns so protocols remain portable across environments.
-- Support both dynamic runtime schema loading and static integration (C++ and Python bindings).
+- Support dynamic runtime schema loading plus generated C++, Python, and TypeScript integrations.
 
 ## What The Repository Includes
 
 - A schema authoring layer with `.upr` and YAML support, including runtime loading and pre-compilation
 - A schema compiler that validates definitions and produces compiled protocol metadata
 - A runtime for framing, encoding, partial decoding, segmented encoding, and stream polling
-- Generated bindings for static C++ and Python integrations
+- Generated bindings for static C++, native-backed Python, and typed TypeScript integrations
 - Protocol discovery utilities for producing draft schemas from captured samples
 - Transport adapters and framed channels for file descriptors, sockets, and other byte-stream environments
 - An HTML workbench for inspecting definitions, compiled protocols, discovery output, and sample frames
@@ -137,7 +137,9 @@ bazel run //examples:hardware_byte_stream_example
 - `packages/upr_authoring` contains schema loading and authoring support.
 - `packages/upr_compiler` contains schema validation and compilation.
 - `packages/upr_runtime` contains framing, encoding, decoding, and stream runtime support.
-- `packages/upr_codegen` contains generated binding support.
+- `packages/upr_codegen` contains C++, Python, and TypeScript binding generators.
+- `packages/upr_python` contains the Python runtime facade, framing helpers, and native-backed generated module support.
+- `packages/upr_typescript` contains the TypeScript/JavaScript runtime, typed facades, and framing helpers.
 - `packages/upr_discovery` contains protocol discovery utilities.
 - `packages/upr_adapters` contains concrete transport adapters and framed channel support.
 - `packages/upr_workbench` contains HTML inspection tooling for definitions, compiled protocols, discovery output, and sample frames.

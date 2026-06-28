@@ -1,8 +1,9 @@
-"""Universal Protocol Runtime - pure-Python codec, framing and session helpers.
+"""Universal Protocol Runtime Python facade, framing and session helpers.
 
-This package provides a dependency-free encoder/decoder driven by schema
-descriptors emitted by ``upr-gen --lang python``, plus framing/session helpers
-that interoperate with the C++ runtime.
+Generated protocol modules emitted by ``upr-gen --lang python`` delegate
+encode/decode to their generated pybind11 extension, which wraps the C++
+direct/static codec. This package also provides shared metadata types,
+exceptions, framing and session helpers.
 
 Typical usage with a generated module ``my_protocol``::
 

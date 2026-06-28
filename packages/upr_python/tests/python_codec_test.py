@@ -1,5 +1,7 @@
 """Cross-language byte-compatibility and behaviour tests for the Python codec."""
 
+import dataclasses
+
 import pytest
 
 import generated_general_direct_codec as gdc
@@ -202,6 +204,15 @@ def test_manual_protocol_covers_scalar_alignment_reserved_and_variant_paths() ->
     assert decoded["blob"] == bytes(FIXED_BLOB)
     assert decoded["reserved"] == bytes([RESERVED_FILL, RESERVED_FILL])
     assert decoded["detail"]["bid"] == QUOTE_BID
+
+
+def test_decode_can_return_zero_copy_bytes_views() -> None:
+    frame = raw_codec.encode(MATRIX_PROTOCOL, MATRIX_MESSAGE, matrix_value())
+
+    decoded = raw_codec.decode(MATRIX_PROTOCOL, MATRIX_MESSAGE, frame, zero_copy=True)
+
+    assert isinstance(decoded["blob"], memoryview)
+    assert decoded["blob"].tobytes() == bytes(FIXED_BLOB)
 
 
 def test_runtime_codec_reports_missing_message_by_operation() -> None:
@@ -602,6 +613,292 @@ def test_decode_sequence_rejects_zero_width_records() -> None:
         raw_codec.decode_sequence(protocol, empty_struct, bytes([0]))
 
 
+RAW_ITEM_STRUCT = Layout(
+    name="RawItem",
+    is_message=False,
+    minimum_size=1,
+    allow_trailing_bytes=False,
+    dispatch_prefix=b"",
+    fields=(Field(0, "v", "unsigned", width_bytes=1),),
+)
+# Exercises the pure-Python codec (``raw_codec``) directly for dynamic
+# collections, derived length/count fields, list-of-int byte payloads and
+# presence-gated dynamic fields - paths only otherwise covered via the native
+# extension.
+RAW_RICH_MESSAGE = Layout(
+    name="RawRich",
+    is_message=True,
+    minimum_size=3,
+    allow_trailing_bytes=False,
+    dispatch_prefix=b"",
+    fields=(
+        Field(0, "item_count", "unsigned", width_bytes=1),
+        Field(1, "items", "collection", struct_id=0, dynamic_count=True, count_from_field=0),
+        Field(2, "blob_len", "unsigned", width_bytes=1),
+        Field(3, "blob", "bytes", dynamic_size=True, size_from_field=2),
+        Field(4, "presence", "unsigned", width_bytes=1),
+        Field(5, "note_len", "unsigned", width_bytes=1, has_presence=True, presence_field=4, presence_bit=0),
+        Field(
+            6,
+            "note",
+            "string",
+            dynamic_size=True,
+            size_from_field=5,
+            string_encoding="utf8",
+            has_presence=True,
+            presence_field=4,
+            presence_bit=0,
+        ),
+    ),
+)
+RAW_RICH_PROTOCOL = Protocol(
+    name="raw_rich", fingerprint=21, structs=(RAW_ITEM_STRUCT,), messages=(RAW_RICH_MESSAGE,)
+)
+RAW_ITEM_VALUES = (10, 20, 30)
+RAW_BLOB_BYTES = [0xCA, 0xFE]
+RAW_NOTE_TEXT = "hi"
+
+
+def raw_rich_value(present: bool) -> dict[str, object]:
+    value: dict[str, object] = {
+        "item_count": 0,  # auto-derived from len(items)
+        "items": [{"v": item} for item in RAW_ITEM_VALUES],
+        "blob_len": 0,  # auto-derived from len(blob)
+        "blob": list(RAW_BLOB_BYTES),  # list[int] payload path
+        "presence": 1 if present else 0,
+    }
+    if present:
+        value["note_len"] = 0  # auto-derived from len(note)
+        value["note"] = RAW_NOTE_TEXT
+    return value
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_raw_codec_round_trips_collections_bytes_and_presence(present: bool) -> None:
+    frame = raw_codec.encode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, raw_rich_value(present))
+
+    decoded = raw_codec.decode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, frame)
+
+    assert [item["v"] for item in decoded["items"]] == list(RAW_ITEM_VALUES)
+    assert decoded["item_count"] == len(RAW_ITEM_VALUES)
+    assert decoded["blob"] == bytes(RAW_BLOB_BYTES)
+    assert decoded["blob_len"] == len(RAW_BLOB_BYTES)
+    if present:
+        assert decoded["note"] == RAW_NOTE_TEXT
+        assert decoded["note_len"] == len(RAW_NOTE_TEXT)
+    else:
+        assert "note" not in decoded
+        assert "note_len" not in decoded
+
+
+def test_raw_codec_decode_sequence_round_trips_packed_struct_records() -> None:
+    blob = b"".join(
+        raw_codec.encode(RAW_RICH_PROTOCOL, RAW_ITEM_STRUCT, {"v": value}) for value in RAW_ITEM_VALUES
+    )
+
+    records = raw_codec.decode_sequence(RAW_RICH_PROTOCOL, RAW_ITEM_STRUCT, blob)
+
+    assert [record["v"] for record in records] == list(RAW_ITEM_VALUES)
+
+
+def test_raw_codec_encodes_dataclasses_and_rejects_unsupported_top_level_values() -> None:
+    @dataclasses.dataclass
+    class _Item:
+        v: int
+
+    @dataclasses.dataclass
+    class _Rich:
+        item_count: int
+        items: list
+        blob_len: int
+        blob: object
+        presence: int
+
+    typed = _Rich(
+        item_count=0,
+        items=[_Item(value) for value in RAW_ITEM_VALUES],
+        blob_len=0,
+        blob=b"\x01\x02",
+        presence=0,
+    )
+
+    frame = raw_codec.encode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, typed)
+    decoded = raw_codec.decode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, frame)
+
+    assert [item["v"] for item in decoded["items"]] == list(RAW_ITEM_VALUES)
+    assert decoded["blob"] == b"\x01\x02"
+    with pytest.raises(EncodeError):
+        raw_codec.encode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, 123)
+
+
+def test_raw_codec_rejects_impossible_collection_count() -> None:
+    # A 3-byte frame clears ``minimum_size`` but claims 255 single-byte items,
+    # which cannot fit, exercising the collection bounds guard.
+    with pytest.raises(DecodeError) as exc_info:
+        raw_codec.decode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, bytes([0xFF, 0x00, 0x00]))
+
+    assert exc_info.value.field_name == "items"
+
+
+def test_raw_codec_rejects_dynamic_byte_field_overrunning_the_frame() -> None:
+    # item_count=0, blob_len=200, but no 200-byte payload follows.
+    with pytest.raises(DecodeError) as exc_info:
+        raw_codec.decode(RAW_RICH_PROTOCOL, RAW_RICH_MESSAGE, bytes([0x00, 0xC8, 0x00]))
+
+    assert exc_info.value.field_name == "blob"
+
+
+GATED_CHECKSUM_MESSAGE = Layout(
+    name="GatedChecksum",
+    is_message=True,
+    minimum_size=2,
+    allow_trailing_bytes=False,
+    dispatch_prefix=b"",
+    fields=(
+        Field(0, "presence", "unsigned", width_bytes=1),
+        Field(1, "opt", "unsigned", width_bytes=1, has_presence=True, presence_field=0, presence_bit=0),
+        Field(2, "crc", "unsigned", width_bytes=1),
+    ),
+    checksums=(Checksum(2, 1, "xor8", ChecksumAnchor("frame_start"), ChecksumAnchor("before_self", 2)),),
+)
+GATED_CHECKSUM_PROTOCOL = Protocol(
+    name="gated_checksum", fingerprint=23, structs=(), messages=(GATED_CHECKSUM_MESSAGE,)
+)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({"presence": 1, "opt": 7}, {"presence": 1, "opt": 7}),
+        ({"presence": 0}, {"presence": 0}),
+    ],
+)
+def test_raw_codec_checksum_with_presence_gated_field_round_trips(
+    values: dict[str, object], expected: dict[str, object]
+) -> None:
+    frame = raw_codec.encode(GATED_CHECKSUM_PROTOCOL, GATED_CHECKSUM_MESSAGE, values)
+
+    decoded = raw_codec.decode(GATED_CHECKSUM_PROTOCOL, GATED_CHECKSUM_MESSAGE, frame)
+
+    assert {key: decoded[key] for key in expected} == expected
+    if "opt" not in expected:
+        assert "opt" not in decoded
+
+
+def test_raw_codec_detects_checksum_corruption() -> None:
+    frame = bytearray(raw_codec.encode(GATED_CHECKSUM_PROTOCOL, GATED_CHECKSUM_MESSAGE, {"presence": 0}))
+    frame[-1] ^= 0xFF
+
+    with pytest.raises(DecodeError) as exc_info:
+        raw_codec.decode(GATED_CHECKSUM_PROTOCOL, GATED_CHECKSUM_MESSAGE, bytes(frame))
+
+    assert exc_info.value.status == DecodeStatus.CHECKSUM_MISMATCH
+    assert exc_info.value.field_name == "crc"
+
+
+def test_raw_codec_prefixes_variant_element_decode_errors() -> None:
+    variant_body = Layout(
+        name="VariantBody",
+        is_message=False,
+        minimum_size=2,
+        allow_trailing_bytes=False,
+        dispatch_prefix=b"",
+        fields=(Field(0, "x", "unsigned", width_bytes=2),),
+    )
+    variant_message = Layout(
+        name="VariantMessage",
+        is_message=True,
+        minimum_size=1,
+        allow_trailing_bytes=False,
+        dispatch_prefix=b"",
+        fields=(
+            Field(0, "tag", "unsigned", width_bytes=1),
+            Field(1, "detail", "variant", tag_from_field=0, variant_cases=(VariantCase(1, 0),)),
+        ),
+    )
+    protocol = Protocol(
+        name="variant_proto", fingerprint=24, structs=(variant_body,), messages=(variant_message,)
+    )
+
+    # ``tag`` selects case 1 whose body needs two bytes, but only one remains.
+    with pytest.raises(DecodeError) as exc_info:
+        raw_codec.decode(protocol, variant_message, bytes([1, 5]))
+
+    assert exc_info.value.field_name == "detail"
+
+
+def test_runtime_codec_encodes_dataclasses_sequences_and_rejects_bad_values() -> None:
+    runtime_codec = Codec(RAW_RICH_PROTOCOL)
+    blob = b"".join(runtime_codec.encode("RawItem", {"v": value}) for value in RAW_ITEM_VALUES)
+
+    records = runtime_codec.decode_sequence("RawItem", blob)
+
+    assert [record["v"] for record in records] == list(RAW_ITEM_VALUES)
+
+    @dataclasses.dataclass
+    class _Item:
+        v: int
+
+    assert runtime_codec.encode("RawItem", _Item(9)) == bytes([9])
+    with pytest.raises(EncodeError):
+        runtime_codec.encode("RawItem", 123)
+
+
+def test_iter_frames_rejects_oversized_and_ignores_trailing_partial() -> None:
+    complete = encode_frame(FRAME_ONE, prefix_width=SHORT_PREFIX_WIDTH)
+    # A complete frame followed by a prefix that promises more bytes than remain
+    # yields only the complete frame (the partial tail waits for more data).
+    partial_tail = complete + bytes([len(FRAME_TWO) + 1])
+
+    assert list(iter_frames(partial_tail, prefix_width=SHORT_PREFIX_WIDTH)) == [FRAME_ONE]
+
+    oversized = encode_frame(OVERSIZED_PAYLOAD, prefix_width=SHORT_PREFIX_WIDTH)
+    with pytest.raises(FramingError):
+        list(iter_frames(oversized, prefix_width=SHORT_PREFIX_WIDTH, max_payload=MAX_TINY_PAYLOAD))
+
+
+def test_frame_decoder_compacts_consumed_prefix_across_feeds() -> None:
+    decoder = FrameDecoder(prefix_width=SHORT_PREFIX_WIDTH)
+    complete = encode_frame(FRAME_ONE, prefix_width=SHORT_PREFIX_WIDTH)
+    pending_payload = b"abcde"
+
+    # A complete frame plus a prefix announcing a 5-byte payload leaves the
+    # consumed region in front of an unread partial frame.
+    assert decoder.feed(complete + bytes([len(pending_payload)])) == [FRAME_ONE]
+    assert decoder.feed(b"") == []
+    # The next non-empty feed both compacts away the consumed prefix and
+    # completes the pending frame.
+    assert decoder.feed(pending_payload) == [pending_payload]
+
+
+def test_raw_codec_rejects_zero_width_collection_elements() -> None:
+    empty_item = Layout(
+        name="EmptyItem",
+        is_message=False,
+        minimum_size=0,
+        allow_trailing_bytes=False,
+        dispatch_prefix=b"",
+        fields=(),
+    )
+    empty_collection_message = Layout(
+        name="EmptyCollection",
+        is_message=True,
+        minimum_size=1,
+        allow_trailing_bytes=False,
+        dispatch_prefix=b"",
+        fields=(
+            Field(0, "n", "unsigned", width_bytes=1),
+            Field(1, "items", "collection", struct_id=0, dynamic_count=True, count_from_field=0),
+        ),
+    )
+    protocol = Protocol(
+        name="empty_collection", fingerprint=22, structs=(empty_item,), messages=(empty_collection_message,)
+    )
+
+    with pytest.raises(DecodeError):
+        raw_codec.decode(protocol, empty_collection_message, bytes([2]))
+
+
 def book_value(pair_b_values: tuple[int, int] = PAIR_B_VALUES) -> dict[str, object]:
     pairs = [
         {"key": key, "value": {"a": a_value, "b": b_value}}
@@ -807,6 +1104,14 @@ def test_frame_decoder_handles_partial_feeds() -> None:
 
     assert decoder.feed(wire[:split_at]) == []
     assert decoder.feed(wire[split_at:]) == [payload]
+
+
+def test_frame_decoder_handles_multiple_frames_without_front_deletes() -> None:
+    decoder = FrameDecoder()
+    wire = encode_frame(FRAME_ONE) + encode_frame(FRAME_TWO)
+
+    assert decoder.feed(wire) == [FRAME_ONE, FRAME_TWO]
+    assert decoder.feed(b"") == []
 
 
 def test_frame_decoder_rejects_oversized_and_retains_partial_payloads() -> None:

@@ -23,6 +23,10 @@ constexpr std::string_view kUsage =
     "  --protocol-namespace <name> C++ inner namespace (default: derived from protocol).\n"
     "  --header-guard <macro>      C++ include guard (default: derived).\n"
     "  --module-name <name>        Python module name (default: derived from protocol).\n"
+    "  --native-output <path>      Python only: generated pybind11 extension source.\n"
+    "  --native-header-output <path> Python only: generated C++ direct codec header.\n"
+    "  --native-module-name <name> Python only: native extension module name.\n"
+    "  --native-header-include <path> Python only: include path used by native source.\n"
     "  --runtime-import <spec>     TypeScript runtime import (default: universal-protocol-runtime).\n"
     "  -h, --help                  Show this help.\n";
 
@@ -40,11 +44,35 @@ const char* require_value(int argc, char** argv, int* index, std::string_view op
   return argv[*index];
 }
 
+std::string directory_name(const std::string& path) {
+  const std::size_t slash = path.find_last_of("/\\");
+  if (slash == std::string::npos) {
+    return {};
+  }
+  return path.substr(0, slash + 1U);
+}
+
+std::string base_name(const std::string& path) {
+  const std::size_t slash = path.find_last_of("/\\");
+  return slash == std::string::npos ? path : path.substr(slash + 1U);
+}
+
+std::string stem_name(const std::string& path) {
+  std::string base = base_name(path);
+  const std::size_t dot = base.find_last_of('.');
+  if (dot != std::string::npos) {
+    base.resize(dot);
+  }
+  return base.empty() ? "generated_protocol" : base;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   std::string input_path;
   std::string output_path;
+  std::string native_output_path;
+  std::string native_header_output_path;
   std::string language = "cpp";
   upr::CppBindingsOptions cpp_options;
   upr::PythonBindingsOptions python_options;
@@ -56,6 +84,10 @@ int main(int argc, char** argv) {
       input_path = require_value(argc, argv, &index, argument);
     } else if (argument == "--output") {
       output_path = require_value(argc, argv, &index, argument);
+    } else if (argument == "--native-output") {
+      native_output_path = require_value(argc, argv, &index, argument);
+    } else if (argument == "--native-header-output") {
+      native_header_output_path = require_value(argc, argv, &index, argument);
     } else if (argument == "--lang" || argument == "--language") {
       language = require_value(argc, argv, &index, argument);
     } else if (argument == "--namespace-prefix") {
@@ -66,6 +98,10 @@ int main(int argc, char** argv) {
       cpp_options.header_guard = require_value(argc, argv, &index, argument);
     } else if (argument == "--module-name") {
       python_options.module_name = require_value(argc, argv, &index, argument);
+    } else if (argument == "--native-module-name") {
+      python_options.native_module_name = require_value(argc, argv, &index, argument);
+    } else if (argument == "--native-header-include") {
+      python_options.native_header_include = require_value(argc, argv, &index, argument);
     } else if (argument == "--runtime-import") {
       typescript_options.runtime_import = require_value(argc, argv, &index, argument);
     } else if (argument == "-h" || argument == "--help") {
@@ -89,6 +125,19 @@ int main(int argc, char** argv) {
   }
   if (output_path.empty()) {
     return fail("Missing required --output path.");
+  }
+  if (language == "python") {
+    const std::string output_dir = directory_name(output_path);
+    const std::string output_stem = stem_name(output_path);
+    if (native_output_path.empty()) {
+      native_output_path = output_dir + "_" + output_stem + "_native.cpp";
+    }
+    if (native_header_output_path.empty()) {
+      native_header_output_path = output_dir + output_stem + "_native.hpp";
+    }
+    if (python_options.native_header_include.empty()) {
+      python_options.native_header_include = base_name(native_header_output_path);
+    }
   }
 
   upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_file(input_path);
@@ -119,6 +168,40 @@ int main(int argc, char** argv) {
   out.close();
   if (!out) {
     return fail("Failed to write output file: " + output_path);
+  }
+
+  if (language == "python" && !native_header_output_path.empty()) {
+    upr::CppBindingsOptions native_cpp_options;
+    upr::StatusOr<std::string> native_header = upr::generate_cpp_bindings_header(compiled.value(), native_cpp_options);
+    if (!native_header.ok()) {
+      return fail(native_header.status().message());
+    }
+    std::ofstream native_header_out(native_header_output_path, std::ios::binary | std::ios::trunc);
+    if (!native_header_out.is_open()) {
+      return fail("Failed to open native header output file: " + native_header_output_path);
+    }
+    native_header_out << native_header.value();
+    native_header_out.close();
+    if (!native_header_out) {
+      return fail("Failed to write native header output file: " + native_header_output_path);
+    }
+  }
+
+  if (language == "python" && !native_output_path.empty()) {
+    upr::StatusOr<std::string> native_generated =
+        upr::generate_python_native_extension_module(compiled.value(), python_options);
+    if (!native_generated.ok()) {
+      return fail(native_generated.status().message());
+    }
+    std::ofstream native_out(native_output_path, std::ios::binary | std::ios::trunc);
+    if (!native_out.is_open()) {
+      return fail("Failed to open native output file: " + native_output_path);
+    }
+    native_out << native_generated.value();
+    native_out.close();
+    if (!native_out) {
+      return fail("Failed to write native output file: " + native_output_path);
+    }
   }
 
   return 0;

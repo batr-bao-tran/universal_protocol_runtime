@@ -1,6 +1,6 @@
 /**
  * Dependency-free, metadata-driven encoder/decoder. The algorithm mirrors the
- * C++ direct codec (and therefore the Python codec) byte-for-byte, so frames are
+ * C++ direct codec and Python runtime byte-for-byte, so frames are
  * interchangeable across languages.
  *
  * Values are plain objects:
@@ -19,13 +19,110 @@ import * as checksums from "./checksums.js";
 import { DecodeError, EncodeError } from "./errors.js";
 import type { Checksum, ChecksumAnchor, Field, Layout, Protocol } from "./metadata.js";
 import { isGated } from "./metadata.js";
+import { TextDecoder, TextEncoder } from "node:util";
 
 const SCALAR_KINDS = new Set(["unsigned", "signed", "float32", "float64", "enum"]);
+const BYTE_MASK_BIGINT = 0xffn;
+const BITS_PER_BYTE = 8;
+const BITS_PER_BYTE_BIGINT = 8n;
+// Six bytes (48 bits) is the widest unsigned integer that always fits safely in a JS number.
+const MAX_INTEGER_WIDTH_BYTES_AS_NUMBER = 6;
+// Used only when dynamic output outgrows an exact schema-derived starting size.
+const MIN_ENCODE_BUFFER_CAPACITY = 64;
+const ENCODE_BUFFER_GROWTH_FACTOR = 2;
+// Keep spread calls comfortably below engine argument limits while decoding large ASCII fields.
+const ASCII_DECODE_CHUNK_SIZE = 0x8000;
 
 type Values = Record<string, unknown>;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: true });
-const ASCII_DECODE_CHUNK_SIZE = 0x8000;
+
+class ByteWriter {
+  private buffer: Uint8Array;
+  private view: DataView;
+  length = 0;
+
+  constructor(initialCapacity = 0) {
+    this.buffer = new Uint8Array(initialCapacity);
+    this.view = new DataView(this.buffer.buffer);
+  }
+
+  private ensureCapacity(requiredLength: number): void {
+    if (requiredLength <= this.buffer.length) {
+      return;
+    }
+    let capacity = Math.max(this.buffer.length, MIN_ENCODE_BUFFER_CAPACITY);
+    while (capacity < requiredLength) {
+      capacity = Math.max(capacity * ENCODE_BUFFER_GROWTH_FACTOR, requiredLength);
+    }
+    const next = new Uint8Array(capacity);
+    next.set(this.buffer.subarray(0, this.length));
+    this.buffer = next;
+    this.view = new DataView(this.buffer.buffer);
+  }
+
+  private reserve(byteLength: number): number {
+    const start = this.length;
+    this.ensureCapacity(start + byteLength);
+    this.length += byteLength;
+    return start;
+  }
+
+  padTo(targetLength: number): void {
+    if (targetLength <= this.length) {
+      return;
+    }
+    const start = this.length;
+    this.ensureCapacity(targetLength);
+    this.buffer.fill(0, start, targetLength);
+    this.length = targetLength;
+  }
+
+  writeBytes(bytes: ArrayLike<number>): void {
+    const start = this.reserve(bytes.length);
+    this.buffer.set(bytes, start);
+  }
+
+  writeRepeated(byte: number, count: number): void {
+    const start = this.reserve(count);
+    this.buffer.fill(byte, start, start + count);
+  }
+
+  writeFloat32(value: number, littleEndian: boolean): void {
+    this.view.setFloat32(this.reserve(4), value, littleEndian);
+  }
+
+  writeFloat64(value: number, littleEndian: boolean): void {
+    this.view.setFloat64(this.reserve(8), value, littleEndian);
+  }
+
+  writeUnsigned(value: bigint, widthBytes: number, littleEndian: boolean): void {
+    this.patchUnsigned(this.reserve(widthBytes), value, widthBytes, littleEndian);
+  }
+
+  patchUnsigned(start: number, value: bigint, widthBytes: number, littleEndian: boolean): void {
+    let v = value;
+    if (littleEndian) {
+      for (let index = 0; index < widthBytes; index++) {
+        this.buffer[start + index] = Number(v & BYTE_MASK_BIGINT);
+        v >>= BITS_PER_BYTE_BIGINT;
+      }
+      return;
+    }
+    for (let index = widthBytes - 1; index >= 0; index--) {
+      this.buffer[start + index] = Number(v & BYTE_MASK_BIGINT);
+      v >>= BITS_PER_BYTE_BIGINT;
+    }
+  }
+
+  subarray(start: number, end: number): Uint8Array {
+    return this.buffer.subarray(start, end);
+  }
+
+  toUint8Array(): Uint8Array {
+    return this.length === this.buffer.length ? this.buffer : this.buffer.slice(0, this.length);
+  }
+}
 
 function alignUp(value: number, alignment: number): number {
   if (alignment <= 1) {
@@ -36,7 +133,7 @@ function alignUp(value: number, alignment: number): number {
 }
 
 function toUnsigned(value: number | bigint, widthBytes: number, fieldName?: string): bigint {
-  const mod = 1n << BigInt(widthBytes * 8);
+  const mod = 1n << BigInt(widthBytes * BITS_PER_BYTE);
   let v: bigint;
   if (typeof value === "bigint") {
     v = value;
@@ -45,8 +142,8 @@ function toUnsigned(value: number | bigint, widthBytes: number, fieldName?: stri
     if (!Number.isFinite(numeric)) {
       throw new EncodeError("expected a finite numeric value", fieldName);
     }
-    if (widthBytes > 6 && !Number.isSafeInteger(numeric)) {
-      throw new EncodeError("7- and 8-byte integer fields require bigint or a safe integer", fieldName);
+    if (widthBytes > MAX_INTEGER_WIDTH_BYTES_AS_NUMBER && !Number.isSafeInteger(numeric)) {
+      throw new EncodeError("integers wider than 6 bytes require bigint or a safe integer", fieldName);
     }
     v = BigInt(Math.trunc(numeric));
   }
@@ -67,12 +164,6 @@ function validateAscii(data: Uint8Array): boolean {
   return true;
 }
 
-function appendBytes(out: number[], bytes: ArrayLike<number>): void {
-  for (let index = 0; index < bytes.length; index++) {
-    out.push(bytes[index]);
-  }
-}
-
 function decodeAscii(data: Uint8Array): string {
   let text = "";
   for (let offset = 0; offset < data.length; offset += ASCII_DECODE_CHUNK_SIZE) {
@@ -80,10 +171,6 @@ function decodeAscii(data: Uint8Array): string {
   }
   return text;
 }
-
-// --------------------------------------------------------------------------- //
-// Encoding
-// --------------------------------------------------------------------------- //
 
 function asBytes(field: Field, value: unknown): Uint8Array {
   if (typeof value === "string") {
@@ -110,8 +197,14 @@ function fieldPresent(layout: Layout, field: Field, values: Values): boolean {
   return true;
 }
 
-function derivedLengthFields(layout: Layout, values: Values): Map<number, number> {
-  const derived = new Map<number, number>();
+interface DerivedFields {
+  lengths: Map<number, number>;
+  payloads: Map<number, Uint8Array>;
+}
+
+function deriveFields(layout: Layout, values: Values): DerivedFields {
+  const lengths = new Map<number, number>();
+  const payloads = new Map<number, Uint8Array>();
   for (const field of layout.fields) {
     if (isGated(field) && !fieldPresent(layout, field, values)) {
       continue;
@@ -119,80 +212,66 @@ function derivedLengthFields(layout: Layout, values: Values): Map<number, number
     if ((field.kind === "bytes" || field.kind === "string") && field.dynamicSize) {
       const value = values[field.name];
       if (value !== undefined && value !== null) {
-        derived.set(field.sizeFromField, asBytes(field, value).length);
+        const payload = asBytes(field, value);
+        payloads.set(field.id, payload);
+        lengths.set(field.sizeFromField, payload.length);
       }
     } else if (field.kind === "collection" && field.dynamicCount) {
       const value = values[field.name];
       if (Array.isArray(value)) {
-        derived.set(field.countFromField, value.length);
+        lengths.set(field.countFromField, value.length);
       }
     }
   }
-  return derived;
+  return { lengths, payloads };
 }
 
-function encodeScalar(out: number[], field: Field, value: unknown): void {
+function encodeScalar(writer: ByteWriter, field: Field, value: unknown): void {
   const le = littleEndian(field);
   if (field.kind === "float32") {
-    const buffer = new Uint8Array(4);
-    new DataView(buffer.buffer).setFloat32(0, Number(value), le);
-    appendBytes(out, buffer);
+    writer.writeFloat32(Number(value), le);
     return;
   }
   if (field.kind === "float64") {
-    const buffer = new Uint8Array(8);
-    new DataView(buffer.buffer).setFloat64(0, Number(value), le);
-    appendBytes(out, buffer);
+    writer.writeFloat64(Number(value), le);
     return;
   }
-  let v = toUnsigned(value as number | bigint, field.widthBytes, field.name);
-  const bytes = new Array<number>(field.widthBytes);
-  for (let index = 0; index < field.widthBytes; index++) {
-    bytes[index] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-  if (!le) {
-    bytes.reverse();
-  }
-  appendBytes(out, bytes);
-}
-
-function isChecksumField(layout: Layout, fieldId: number): boolean {
-  return layout.checksums.some((chk) => chk.fieldId === fieldId);
+  writer.writeUnsigned(toUnsigned(value as number | bigint, field.widthBytes, field.name), field.widthBytes, le);
 }
 
 function encodeField(
   protocol: Protocol,
-  out: number[],
+  writer: ByteWriter,
   layout: Layout,
   field: Field,
   value: unknown,
   values: Values,
+  derived: DerivedFields,
 ): void {
   if (SCALAR_KINDS.has(field.kind)) {
-    encodeScalar(out, field, value);
+    encodeScalar(writer, field, value);
     return;
   }
   if (field.kind === "bytes" || field.kind === "string") {
-    const payload = asBytes(field, value);
+    const payload = derived.payloads.get(field.id) ?? asBytes(field, value);
     if (!field.dynamicSize && payload.length !== field.fixedSize) {
       throw new EncodeError(
         `fixed field expects ${field.fixedSize} bytes, got ${payload.length}`,
         field.name,
       );
     }
-    appendBytes(out, payload);
+    writer.writeBytes(payload);
     return;
   }
   if (field.kind === "struct") {
     const nested = protocol.structs[field.structId];
-    appendBytes(out, encodeLayout(protocol, nested, (value ?? {}) as Values));
+    encodeLayoutInto(protocol, nested, (value ?? {}) as Values, writer);
     return;
   }
   if (field.kind === "collection") {
     const nested = protocol.structs[field.structId];
     for (const element of (value ?? []) as Values[]) {
-      appendBytes(out, encodeLayout(protocol, nested, element));
+      encodeLayoutInto(protocol, nested, element, writer);
     }
     return;
   }
@@ -205,7 +284,7 @@ function encodeField(
     for (const variantCase of field.variantCases) {
       if (variantCase.tagValue === tag) {
         const nested = protocol.structs[variantCase.structId];
-        appendBytes(out, encodeLayout(protocol, nested, (value ?? {}) as Values));
+        encodeLayoutInto(protocol, nested, (value ?? {}) as Values, writer);
         return;
       }
     }
@@ -236,85 +315,65 @@ function anchorOffset(
   }
 }
 
-function encodeLayout(protocol: Protocol, layout: Layout, values: Values): number[] {
-  const out: number[] = [];
-  const derived = derivedLengthFields(layout, values);
+function encodeLayoutInto(protocol: Protocol, layout: Layout, values: Values, writer: ByteWriter): void {
+  const layoutStart = writer.length;
+  const derived = deriveFields(layout, values);
+  const checksumFieldIds = new Set(layout.checksums.map((chk) => chk.fieldId));
   const fieldStarts = new Map<number, number>();
   const fieldEnds = new Map<number, number>();
 
   for (const field of layout.fields) {
     if (isGated(field) && !fieldPresent(layout, field, values)) {
-      fieldStarts.set(field.id, out.length);
-      fieldEnds.set(field.id, out.length);
+      const relativeOffset = writer.length - layoutStart;
+      fieldStarts.set(field.id, relativeOffset);
+      fieldEnds.set(field.id, relativeOffset);
       continue;
     }
-    const aligned = alignUp(out.length, field.alignment);
-    while (out.length < aligned) {
-      out.push(0);
-    }
-    fieldStarts.set(field.id, out.length);
+    writer.padTo(layoutStart + alignUp(writer.length - layoutStart, field.alignment));
+    fieldStarts.set(field.id, writer.length - layoutStart);
 
-    if (isChecksumField(layout, field.id)) {
-      for (let index = 0; index < field.widthBytes; index++) {
-        out.push(0);
-      }
-    } else if (derived.has(field.id)) {
-      encodeScalar(out, field, derived.get(field.id) as number);
+    if (checksumFieldIds.has(field.id)) {
+      writer.writeRepeated(0, field.widthBytes);
+    } else if (derived.lengths.has(field.id)) {
+      encodeScalar(writer, field, derived.lengths.get(field.id) as number);
     } else if (field.hasExpectedUnsigned) {
-      encodeScalar(out, field, field.expectedUnsigned);
+      encodeScalar(writer, field, field.expectedUnsigned);
     } else if (field.isReserved) {
-      for (let index = 0; index < field.fixedSize; index++) {
-        out.push(field.reservedFillByte);
-      }
+      writer.writeRepeated(field.reservedFillByte, field.fixedSize);
     } else {
       if (!(field.name in values)) {
         throw new EncodeError("missing value", field.name);
       }
-      encodeField(protocol, out, layout, field, values[field.name], values);
+      encodeField(protocol, writer, layout, field, values[field.name], values, derived);
     }
-    fieldEnds.set(field.id, out.length);
+    fieldEnds.set(field.id, writer.length - layoutStart);
   }
 
   for (const chk of layout.checksums) {
-    const from = anchorOffset(chk.fromAnchor, fieldStarts, fieldEnds, out.length);
-    const to = anchorOffset(chk.toAnchor, fieldStarts, fieldEnds, out.length);
+    const relativeLength = writer.length - layoutStart;
+    const from = anchorOffset(chk.fromAnchor, fieldStarts, fieldEnds, relativeLength);
+    const to = anchorOffset(chk.toAnchor, fieldStarts, fieldEnds, relativeLength);
     let digest: number;
     try {
-      digest = checksums.compute(chk.algorithmName, Uint8Array.from(out.slice(from, to)));
+      digest = checksums.compute(chk.algorithmName, writer.subarray(layoutStart + from, layoutStart + to));
     } catch (error) {
       throw new EncodeError((error as Error).message);
     }
     const chkField = layout.fields[chk.fieldId];
-    const start = fieldStarts.get(chk.fieldId) as number;
-    const le = littleEndian(chkField);
-    let v = toUnsigned(digest, chkField.widthBytes);
-    const bytes = new Array<number>(chkField.widthBytes);
-    for (let index = 0; index < chkField.widthBytes; index++) {
-      bytes[index] = Number(v & 0xffn);
-      v >>= 8n;
-    }
-    if (!le) {
-      bytes.reverse();
-    }
-    for (let index = 0; index < bytes.length; index++) {
-      out[start + index] = bytes[index];
-    }
+    const start = layoutStart + (fieldStarts.get(chk.fieldId) as number);
+    writer.patchUnsigned(start, toUnsigned(digest, chkField.widthBytes), chkField.widthBytes, littleEndian(chkField));
   }
-
-  return out;
 }
 
 /** Encodes a value mapping into a wire frame. */
 export function encode(protocol: Protocol, layout: Layout, values: Values): Uint8Array {
-  return Uint8Array.from(encodeLayout(protocol, layout, values));
+  const writer = new ByteWriter(layout.minimumSize);
+  encodeLayoutInto(protocol, layout, values, writer);
+  return writer.toUint8Array();
 }
 
-// --------------------------------------------------------------------------- //
-// Decoding
-// --------------------------------------------------------------------------- //
-
 function readUint(frame: Uint8Array, offset: number, width: number, le: boolean): number | bigint {
-  if (width <= 6) {
+  if (width <= MAX_INTEGER_WIDTH_BYTES_AS_NUMBER) {
     let value = 0;
     if (le) {
       for (let index = width - 1; index >= 0; index--) {
@@ -330,11 +389,11 @@ function readUint(frame: Uint8Array, offset: number, width: number, le: boolean)
   let value = 0n;
   if (le) {
     for (let index = width - 1; index >= 0; index--) {
-      value = (value << 8n) | BigInt(frame[offset + index]);
+      value = (value << BITS_PER_BYTE_BIGINT) | BigInt(frame[offset + index]);
     }
   } else {
     for (let index = 0; index < width; index++) {
-      value = (value << 8n) | BigInt(frame[offset + index]);
+      value = (value << BITS_PER_BYTE_BIGINT) | BigInt(frame[offset + index]);
     }
   }
   return value;
@@ -351,12 +410,12 @@ function readScalar(frame: Uint8Array, offset: number, field: Field): number | b
   const unsigned = readUint(frame, offset, field.widthBytes, le);
   if (field.kind === "signed") {
     if (typeof unsigned === "bigint") {
-      const bits = BigInt(field.widthBytes * 8);
+      const bits = BigInt(field.widthBytes * BITS_PER_BYTE);
       const signBit = 1n << (bits - 1n);
       return unsigned >= signBit ? unsigned - (1n << bits) : unsigned;
     }
-    const signBit = 2 ** (field.widthBytes * 8 - 1);
-    return unsigned >= signBit ? unsigned - 2 ** (field.widthBytes * 8) : unsigned;
+    const signBit = 2 ** (field.widthBytes * BITS_PER_BYTE - 1);
+    return unsigned >= signBit ? unsigned - 2 ** (field.widthBytes * BITS_PER_BYTE) : unsigned;
   }
   return unsigned;
 }

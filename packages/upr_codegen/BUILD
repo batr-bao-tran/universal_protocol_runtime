@@ -6,6 +6,13 @@ cc_library(
     name = "upr_codegen",
     srcs = [
         "src/codegen/bindings_generator.cpp",
+        "src/codegen/bindings_generator_common.inc",
+        "src/codegen/bindings_generator_cpp.inc",
+        "src/codegen/bindings_generator_cpp_module.inc",
+        "src/codegen/bindings_generator_python.inc",
+        "src/codegen/bindings_generator_python_module.inc",
+        "src/codegen/bindings_generator_typescript.inc",
+        "src/codegen/bindings_generator_typescript_module.inc",
     ],
     hdrs = glob(["include/**/*.hpp"]),
     includes = ["include"],
@@ -26,7 +33,7 @@ cc_binary(
 )
 
 # Stable, multi-language entry point: `bazel run //packages/upr_codegen:upr-gen --
-# --lang {cpp,python} --input schema.upr --output out`.
+# --lang {cpp,python,typescript} --input schema.upr --output out`.
 alias(
     name = "upr-gen",
     actual = ":generate_bindings",
