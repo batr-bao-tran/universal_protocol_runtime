@@ -22,13 +22,36 @@ from .errors import UprError
 
 _HANDSHAKE_MAGIC = b"UPR1"
 HANDSHAKE_SIZE = 24
+_BYTEORDER_LITTLE = "little"
+_DEFAULT_PREFIX_WIDTH = 4
+_SUPPORTED_PREFIX_WIDTHS = (1, 2, 4)
+_DEFAULT_MAX_FRAME_BYTES = 1 << 20
+_HANDSHAKE_MAGIC_OFFSET = 0
+_HANDSHAKE_MAGIC_SIZE = 4
+_HANDSHAKE_PROTOCOL_VERSION_OFFSET = 4
+_HANDSHAKE_FLAGS_OFFSET = 6
+_HANDSHAKE_TRANSPORT_MODE_OFFSET = 8
+_HANDSHAKE_FRAME_CODEC_OFFSET = 10
+_HANDSHAKE_MAX_FRAME_BYTES_OFFSET = 12
+_HANDSHAKE_SESSION_ID_OFFSET = 16
+_UINT16_WIDTH = 2
+_UINT32_WIDTH = 4
+_UINT64_WIDTH = 8
+_FRAME_DECODER_COMPACT_RATIO = 2
 
 
 class FramingError(UprError):
     """Raised on malformed framing or handshake data."""
 
 
-def encode_frame(payload: bytes, *, prefix_width: int = 4, max_payload: int = 1 << 20) -> bytes:
+def _validate_prefix_width(prefix_width: int) -> None:
+    if prefix_width not in _SUPPORTED_PREFIX_WIDTHS:
+        raise FramingError(f"unsupported prefix width {prefix_width}")
+
+
+def encode_frame(
+    payload: bytes, *, prefix_width: int = _DEFAULT_PREFIX_WIDTH, max_payload: int = _DEFAULT_MAX_FRAME_BYTES
+) -> bytes:
     """Wraps a payload in a little-endian length prefix.
 
     Args:
@@ -39,15 +62,17 @@ def encode_frame(payload: bytes, *, prefix_width: int = 4, max_payload: int = 1 
     Returns:
         The framed bytes (prefix followed by payload).
     """
-    if prefix_width not in (1, 2, 4):
-        raise FramingError(f"unsupported prefix width {prefix_width}")
+    _validate_prefix_width(prefix_width)
     if len(payload) > max_payload:
         raise FramingError("payload exceeds max frame size")
-    return len(payload).to_bytes(prefix_width, "little") + payload
+    frame = bytearray(prefix_width + len(payload))
+    frame[:prefix_width] = len(payload).to_bytes(prefix_width, _BYTEORDER_LITTLE)
+    frame[prefix_width:] = payload
+    return bytes(frame)
 
 
 def try_read_frame(
-    buffer: bytes, *, prefix_width: int = 4, max_payload: int = 1 << 20
+    buffer: bytes, *, prefix_width: int = _DEFAULT_PREFIX_WIDTH, max_payload: int = _DEFAULT_MAX_FRAME_BYTES
 ) -> Optional[Tuple[bytes, int]]:
     """Attempts to read a single frame from the front of ``buffer``.
 
@@ -60,27 +85,36 @@ def try_read_frame(
         ``(payload, bytes_consumed)`` when a full frame is available, else
         ``None`` (need more data).
     """
-    if prefix_width not in (1, 2, 4):
-        raise FramingError(f"unsupported prefix width {prefix_width}")
+    _validate_prefix_width(prefix_width)
     if len(buffer) < prefix_width:
         return None
-    payload_size = int.from_bytes(buffer[:prefix_width], "little")
+    view = memoryview(buffer)
+    payload_size = int.from_bytes(view[:prefix_width], _BYTEORDER_LITTLE)
     if payload_size > max_payload:
         raise FramingError("frame exceeds configured max frame size")
     total = prefix_width + payload_size
     if len(buffer) < total:
         return None
-    return buffer[prefix_width:total], total
+    return view[prefix_width:total].tobytes(), total
 
 
-def iter_frames(buffer: bytes, *, prefix_width: int = 4, max_payload: int = 1 << 20) -> Iterator[bytes]:
+def iter_frames(
+    buffer: bytes, *, prefix_width: int = _DEFAULT_PREFIX_WIDTH, max_payload: int = _DEFAULT_MAX_FRAME_BYTES
+) -> Iterator[bytes]:
     """Yields every complete frame contained in ``buffer``."""
+    _validate_prefix_width(prefix_width)
+    view = memoryview(buffer)
     offset = 0
     while True:
-        result = try_read_frame(buffer[offset:], prefix_width=prefix_width, max_payload=max_payload)
-        if result is None:
+        if len(view) - offset < prefix_width:
             return
-        payload, consumed = result
+        payload_size = int.from_bytes(view[offset:offset + prefix_width], _BYTEORDER_LITTLE)
+        if payload_size > max_payload:
+            raise FramingError("frame exceeds configured max frame size")
+        consumed = prefix_width + payload_size
+        if len(view) - offset < consumed:
+            return
+        payload = view[offset + prefix_width:offset + consumed].tobytes()
         offset += consumed
         yield payload
 
@@ -88,35 +122,53 @@ def iter_frames(buffer: bytes, *, prefix_width: int = 4, max_payload: int = 1 <<
 class FrameDecoder:
     """Stateful accumulator that yields frames as bytes arrive."""
 
-    def __init__(self, *, prefix_width: int = 4, max_payload: int = 1 << 20) -> None:
-        if prefix_width not in (1, 2, 4):
-            raise FramingError(f"unsupported prefix width {prefix_width}")
+    def __init__(self, *, prefix_width: int = _DEFAULT_PREFIX_WIDTH, max_payload: int = _DEFAULT_MAX_FRAME_BYTES) -> None:
+        _validate_prefix_width(prefix_width)
         self._prefix_width = prefix_width
         self._max_payload = max_payload
         self._buffer = bytearray()
+        self._read_offset = 0
+        self._write_offset = 0
+
+    def _append(self, data: bytes) -> None:
+        if not data:
+            return
+        unread = self._write_offset - self._read_offset
+        if self._read_offset and self._read_offset * _FRAME_DECODER_COMPACT_RATIO >= len(self._buffer):
+            del self._buffer[:self._read_offset]
+            self._read_offset = 0
+            self._write_offset = unread
+        self._buffer.extend(data)
+        self._write_offset += len(data)
+
+    def _available_view(self) -> memoryview:
+        return memoryview(self._buffer)[self._read_offset:self._write_offset]
 
     def feed(self, data: bytes) -> List[bytes]:
         """Feeds received bytes and returns any newly completed frames."""
-        self._buffer += data
+        self._append(data)
         frames: List[bytes] = []
+        view = self._available_view()
+        offset = 0
         while True:
-            if len(self._buffer) < self._prefix_width:
+            if len(view) - offset < self._prefix_width:
                 break
-            payload_size = int.from_bytes(self._buffer[:self._prefix_width], "little")
+            payload_size = int.from_bytes(view[offset:offset + self._prefix_width], _BYTEORDER_LITTLE)
             if payload_size > self._max_payload:
                 raise FramingError("frame exceeds configured max frame size")
             consumed = self._prefix_width + payload_size
-            if len(self._buffer) < consumed:
+            if len(view) - offset < consumed:
                 break
-            payload = bytes(self._buffer[self._prefix_width:consumed])
-            del self._buffer[:consumed]
+            payload = view[offset + self._prefix_width:offset + consumed].tobytes()
             frames.append(payload)
+            offset += consumed
+        self._read_offset += offset
+        del view
+        if self._read_offset == self._write_offset:
+            self._buffer.clear()
+            self._read_offset = 0
+            self._write_offset = 0
         return frames
-
-
-# --------------------------------------------------------------------------- #
-# Session handshake
-# --------------------------------------------------------------------------- #
 
 
 class TransportMode(enum.IntEnum):
@@ -135,19 +187,32 @@ class Handshake:
     flags: int = 0
     transport_mode: TransportMode = TransportMode.LENGTH_PREFIXED_STREAM
     frame_codec: int = 1
-    max_frame_bytes: int = 1 << 20
+    max_frame_bytes: int = _DEFAULT_MAX_FRAME_BYTES
     session_id: int = 0
 
 
 def encode_handshake(handshake: Handshake) -> bytes:
     """Encodes a :class:`Handshake` into its 24-byte payload."""
-    out = bytearray(_HANDSHAKE_MAGIC)
-    out += int(handshake.protocol_version).to_bytes(2, "little")
-    out += int(handshake.flags).to_bytes(2, "little")
-    out += int(handshake.transport_mode).to_bytes(2, "little")
-    out += int(handshake.frame_codec).to_bytes(2, "little")
-    out += int(handshake.max_frame_bytes).to_bytes(4, "little")
-    out += int(handshake.session_id).to_bytes(8, "little")
+    out = bytearray(HANDSHAKE_SIZE)
+    out[_HANDSHAKE_MAGIC_OFFSET:_HANDSHAKE_MAGIC_SIZE] = _HANDSHAKE_MAGIC
+    out[_HANDSHAKE_PROTOCOL_VERSION_OFFSET:_HANDSHAKE_FLAGS_OFFSET] = int(handshake.protocol_version).to_bytes(
+        _UINT16_WIDTH, _BYTEORDER_LITTLE
+    )
+    out[_HANDSHAKE_FLAGS_OFFSET:_HANDSHAKE_TRANSPORT_MODE_OFFSET] = int(handshake.flags).to_bytes(
+        _UINT16_WIDTH, _BYTEORDER_LITTLE
+    )
+    out[_HANDSHAKE_TRANSPORT_MODE_OFFSET:_HANDSHAKE_FRAME_CODEC_OFFSET] = int(handshake.transport_mode).to_bytes(
+        _UINT16_WIDTH, _BYTEORDER_LITTLE
+    )
+    out[_HANDSHAKE_FRAME_CODEC_OFFSET:_HANDSHAKE_MAX_FRAME_BYTES_OFFSET] = int(handshake.frame_codec).to_bytes(
+        _UINT16_WIDTH, _BYTEORDER_LITTLE
+    )
+    out[_HANDSHAKE_MAX_FRAME_BYTES_OFFSET:_HANDSHAKE_SESSION_ID_OFFSET] = int(handshake.max_frame_bytes).to_bytes(
+        _UINT32_WIDTH, _BYTEORDER_LITTLE
+    )
+    out[_HANDSHAKE_SESSION_ID_OFFSET:HANDSHAKE_SIZE] = int(handshake.session_id).to_bytes(
+        _UINT64_WIDTH, _BYTEORDER_LITTLE
+    )
     return bytes(out)
 
 
@@ -159,20 +224,28 @@ def decode_handshake(payload: bytes) -> Handshake:
     """
     if len(payload) != HANDSHAKE_SIZE:
         raise FramingError("UPR handshake frame has an unexpected size")
-    if payload[:4] != _HANDSHAKE_MAGIC:
+    if payload[_HANDSHAKE_MAGIC_OFFSET:_HANDSHAKE_MAGIC_SIZE] != _HANDSHAKE_MAGIC:
         raise FramingError("UPR handshake magic is invalid")
-    transport_value = int.from_bytes(payload[8:10], "little")
+    transport_value = int.from_bytes(
+        payload[_HANDSHAKE_TRANSPORT_MODE_OFFSET:_HANDSHAKE_FRAME_CODEC_OFFSET], _BYTEORDER_LITTLE
+    )
     try:
         transport_mode = TransportMode(transport_value)
     except ValueError as exc:
         raise FramingError("UPR handshake transport mode is invalid") from exc
     return Handshake(
-        protocol_version=int.from_bytes(payload[4:6], "little"),
-        flags=int.from_bytes(payload[6:8], "little"),
+        protocol_version=int.from_bytes(
+            payload[_HANDSHAKE_PROTOCOL_VERSION_OFFSET:_HANDSHAKE_FLAGS_OFFSET], _BYTEORDER_LITTLE
+        ),
+        flags=int.from_bytes(payload[_HANDSHAKE_FLAGS_OFFSET:_HANDSHAKE_TRANSPORT_MODE_OFFSET], _BYTEORDER_LITTLE),
         transport_mode=transport_mode,
-        frame_codec=int.from_bytes(payload[10:12], "little"),
-        max_frame_bytes=int.from_bytes(payload[12:16], "little"),
-        session_id=int.from_bytes(payload[16:24], "little"),
+        frame_codec=int.from_bytes(
+            payload[_HANDSHAKE_FRAME_CODEC_OFFSET:_HANDSHAKE_MAX_FRAME_BYTES_OFFSET], _BYTEORDER_LITTLE
+        ),
+        max_frame_bytes=int.from_bytes(
+            payload[_HANDSHAKE_MAX_FRAME_BYTES_OFFSET:_HANDSHAKE_SESSION_ID_OFFSET], _BYTEORDER_LITTLE
+        ),
+        session_id=int.from_bytes(payload[_HANDSHAKE_SESSION_ID_OFFSET:HANDSHAKE_SIZE], _BYTEORDER_LITTLE),
     )
 
 

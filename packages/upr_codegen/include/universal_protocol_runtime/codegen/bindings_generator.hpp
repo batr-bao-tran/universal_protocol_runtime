@@ -18,10 +18,12 @@ struct CppBindingsOptions {
 };
 
 /**
- * @brief Configuration for generated Python bindings.
+ * @brief Configuration for generated Python facade and native extension bindings.
  */
 struct PythonBindingsOptions {
   std::string module_name;
+  std::string native_module_name;
+  std::string native_header_include;
 };
 
 /**
@@ -43,13 +45,22 @@ StatusOr<std::string> generate_cpp_bindings_header(const CompiledProtocol& proto
                                                    const CppBindingsOptions& options = {});
 
 /**
- * @brief Generates a Python module with bindings for a compiled protocol.
+ * @brief Generates the Python facade module for a compiled protocol.
  * @param protocol Compiled protocol metadata to emit.
  * @param options Code generation options for the Python module.
  * @return Generated Python source text on success.
  */
 StatusOr<std::string> generate_python_bindings_module(const CompiledProtocol& protocol,
                                                       const PythonBindingsOptions& options = {});
+
+/**
+ * @brief Generates the pybind11 C++ extension module used by the Python facade.
+ * @param protocol Compiled protocol metadata to emit.
+ * @param options Code generation options for the Python/native modules.
+ * @return Generated C++ source text on success.
+ */
+StatusOr<std::string> generate_python_native_extension_module(const CompiledProtocol& protocol,
+                                                              const PythonBindingsOptions& options = {});
 
 /**
  * @brief Generates a TypeScript module with bindings for a compiled protocol.

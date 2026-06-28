@@ -32,7 +32,7 @@ The authoring layer is responsible for the human-facing description of a protoco
 
 ### Compilation
 
-The compiler mode allows running the execution with maximum performance. It validates protocol definitions, resolves dependencies such as size/count/tag/presence fields, and produces a compiled protocol representation that can be reused across decoders, streams, and integrations, in C++ or Python.
+The compiler mode allows running execution with maximum performance. It validates protocol definitions, resolves dependencies such as size/count/tag/presence fields, and produces compiled protocol metadata or generated bindings for C++, native-backed Python, and TypeScript integrations.
 
 ### Runtime
 
@@ -45,7 +45,7 @@ Given framed bytes and protocol metadata, it decodes messages consistently and e
 Several repository packages build on top of the core layers:
 
 - Discovery helps infer draft protocol definitions from captured samples.
-- Code generation produces static bindings from compiled protocols.
+- Code generation produces static C++ bindings, pybind-backed Python modules, and typed TypeScript facades from compiled protocols.
 - Adapters connect the runtime to concrete transport environments and provide framed channel support over byte streams.
 - The workbench provides an HTML inspection surface for definitions, compiled protocols, discovery output, and sample data.
 
@@ -56,7 +56,9 @@ Several repository packages build on top of the core layers:
 - `packages/upr_compiler` contains validation and compilation.
 - `packages/upr_runtime` contains framing, encoding, decoding, and stream runtime support.
 - `packages/upr_discovery` contains protocol discovery support.
-- `packages/upr_codegen` contains generated binding support.
+- `packages/upr_codegen` contains C++, Python, and TypeScript binding generators.
+- `packages/upr_python` contains the Python runtime facade, framing helpers, and native-backed generated module support.
+- `packages/upr_typescript` contains the TypeScript/JavaScript runtime, typed facades, and framing helpers.
 - `packages/upr_adapters` contains transport adapters and framed transport helpers.
 - `packages/upr_workbench` contains HTML inspection and review tooling.
 - `packages/universal_protocol_runtime` provides the umbrella public interface.

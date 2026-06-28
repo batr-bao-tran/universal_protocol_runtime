@@ -1,10 +1,11 @@
 # universal-protocol-runtime (Python)
 
-A **dependency-free, pure-Python** encoder/decoder for
+A Python facade and generated **pybind11-backed native codec** for
 [Universal Protocol Runtime](../../README.md) (UPR) schemas, plus framing and
 session helpers that interoperate byte-for-byte with the C++ runtime.
 
-* No native extension, no third-party dependencies — just the standard library.
+* Generated protocol modules wrap the C++ direct/static codec for the hot
+  encode/decode path; dynamic runtime schemas can still use the Python `Codec`.
 * Byte-compatible with the C++ direct and dynamic codecs (scalars, signed,
   floats, bytes, strings, structs, collections, tagged variants,
   presence/condition-gated optionals, reserved fills, expected constants and
@@ -27,11 +28,20 @@ pip install -e packages/upr_python
 ## Generate a protocol module
 
 ```bash
-upr-gen --lang python --input my_protocol.upr --output my_protocol.py
+upr-gen --lang python \
+    --input my_protocol.upr \
+    --output my_protocol.py
 # or, before the CLI is on PATH:
 bazel run //packages/upr_codegen:generate_bindings -- \
-    --lang python --input my_protocol.upr --output my_protocol.py
+    --lang python \
+    --input my_protocol.upr \
+    --output my_protocol.py
 ```
+
+This writes `my_protocol.py`, `_my_protocol_native.cpp`, and
+`my_protocol_native.hpp` by default. Build the generated C++ source as a Python
+extension module next to the facade; the facade imports it and exposes the usual
+`CODEC` and typed dataclass APIs.
 
 ## Use it
 
