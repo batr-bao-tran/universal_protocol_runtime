@@ -4,7 +4,8 @@ set -euo pipefail
 
 readonly DEFAULT_BAZEL_VERSION="8.5.0"
 readonly SANITIZER_BUILD_TARGETS="//..."
-readonly SANITIZER_TEST_QUERY="tests(//...)"
+# Skip tests tagged "no-sanitize"
+readonly SANITIZER_TEST_QUERY='tests(//...) except attr(tags, "no-sanitize", tests(//...))'
 bazel_version="${USE_BAZEL_VERSION:-$DEFAULT_BAZEL_VERSION}"
 
 bazel_cmd() {
