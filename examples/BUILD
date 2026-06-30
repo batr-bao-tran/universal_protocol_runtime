@@ -35,7 +35,7 @@ upr_schema_library(
 
 cc_binary(
     name = "upr_demo",
-    srcs = ["src/upr_demo.cpp"],
+    srcs = ["cpp/src/upr_demo.cpp"],
     data = [
         ":market_data_schema",
         ":market_data_yaml_schema",
@@ -48,8 +48,8 @@ cc_binary(
 cc_binary(
     name = "market_data_decode_example",
     srcs = [
-        "include/advanced_market_data_example_support.hpp",
-        "src/market_data_decode_example.cpp",
+        "cpp/include/advanced_market_data_example_support.hpp",
+        "cpp/src/market_data_decode_example.cpp",
     ],
     data = [
         ":advanced_market_data_schema",
@@ -63,8 +63,8 @@ cc_binary(
 cc_binary(
     name = "sensor_packet_encode_example",
     srcs = [
-        "include/hardware_telemetry_example_support.hpp",
-        "src/sensor_packet_encode_example.cpp",
+        "cpp/include/hardware_telemetry_example_support.hpp",
+        "cpp/src/sensor_packet_encode_example.cpp",
     ],
     data = [
         ":hardware_telemetry_schema",
@@ -78,8 +78,8 @@ cc_binary(
 cc_binary(
     name = "hardware_byte_stream_example",
     srcs = [
-        "include/hardware_telemetry_example_support.hpp",
-        "src/hardware_byte_stream_example.cpp",
+        "cpp/include/hardware_telemetry_example_support.hpp",
+        "cpp/src/hardware_byte_stream_example.cpp",
     ],
     data = [
         ":hardware_telemetry_schema",
