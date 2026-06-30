@@ -144,6 +144,7 @@ bazel run //examples:hardware_byte_stream_example
 - `packages/upr_adapters` contains concrete transport adapters and framed channel support.
 - `packages/upr_workbench` contains HTML inspection tooling for definitions, compiled protocols, discovery output, and sample frames.
 - `packages/universal_protocol_runtime` provides the umbrella public interface.
+- `examples` contains runnable C++, Python, and TypeScript examples (`examples/cpp`, `examples/python`, `examples/typescript`) driven by the shared schemas in `examples/schema`.
 
 ## Further Reading
 
