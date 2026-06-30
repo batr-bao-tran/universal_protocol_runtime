@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <iostream>
 
-#include "examples/include/hardware_telemetry_example_support.hpp"
+#include "examples/cpp/include/hardware_telemetry_example_support.hpp"
 
 namespace {
 
