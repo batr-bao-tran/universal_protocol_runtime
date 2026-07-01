@@ -1,26 +1,11 @@
 /**
- * TypeScript equivalent of `examples/cpp/src/market_data_decode_example.cpp`.
+ * Decode advanced market-data message shapes.
  *
- * Decodes the advanced market-data messages from
- * `examples/schema/advanced_market_data.upr`, exercising the three richer schema
- * shapes:
- *
- * - `Snapshot` - a repeating group (`levels: Level[level_count]`);
- * - `Event`    - a tagged variant (`detail: variant(kind) { ... }`);
- * - `Quote`    - presence-gated optional fields (`note` only present when the
- *               presence bit is set).
- *
- * The byte buffers below are identical to the ones hand-built in the C++
- * example, so this doubles as a cross-language byte-compatibility check.
- *
- * Note: the C++ runtime additionally supports *partial decode* via
- * `DecodeFieldMask`. That selective-field API is intentionally not exposed by
- * the TypeScript/Python runtimes - they always decode the whole message - so the
- * partial-decode section of the C++ example has no direct equivalent here.
+ * Shows repeating groups, tagged variants, presence-gated optional fields, and
+ * round-trip encoding from decoded values.
  */
 
 import {
-  CODEC,
   Event,
   Quote,
   Snapshot,

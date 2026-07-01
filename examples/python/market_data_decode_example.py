@@ -1,25 +1,11 @@
-"""Python equivalent of ``examples/cpp/src/market_data_decode_example.cpp``.
+"""Decode advanced market-data message shapes.
 
-Decodes the advanced market-data messages, exercising the three richer schema
-shapes from ``examples/schema/advanced_market_data.upr``:
-
-* ``Snapshot`` - a repeating group (``levels: Level[level_count]``);
-* ``Event``    - a tagged variant (``detail: variant(kind) { ... }``);
-* ``Quote``    - presence-gated optional fields (``note`` only present when the
-                 presence bit is set).
-
-The byte buffers below are identical to the ones hand-built in the C++ example,
-so this is also a cross-language byte-compatibility check.
-
-Note: the C++ runtime additionally supports *partial decode* via
-``DecodeFieldMask``. That selective-field API is intentionally not exposed by the
-Python/TypeScript runtimes - they always decode the whole message - so the
-partial-decode section of the C++ example has no direct equivalent here.
+Shows repeating groups, tagged variants, presence-gated optional fields, typed
+dataclass decoding, and round-trip encoding from decoded values.
 """
 
 from __future__ import annotations
 
-from generated import advanced_market_data
 from generated.advanced_market_data import CODEC, Event, Quote, Snapshot
 
 

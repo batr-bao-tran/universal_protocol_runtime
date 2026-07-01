@@ -1,8 +1,8 @@
 # Examples
 
-The same protocols are demonstrated in **C++, Python, and TypeScript**, all
-driven by the shared schemas in [`schema/`](schema). Equivalent examples across
-languages produce byte-for-byte identical frames.
+These examples show how to use the runtime from C++, Python, and TypeScript.
+The protocol examples all use the shared schemas in [`schema/`](schema), so the
+same message bytes can be exchanged across languages.
 
 ```
 examples/
@@ -20,10 +20,13 @@ examples/
 
 ## C++
 
+Full C++ runtime examples. See [`cpp/README.md`](cpp/README.md).
+
 - `cpp/src/upr_demo.cpp` loads the market-data schema, decodes a fixed-size framed stream, runs discovery, and writes `upr_demo_workbench.html`.
 - `cpp/src/market_data_decode_example.cpp` decodes snapshot, quote, and trade messages, demonstrates partial decode, and writes a workbench.
 - `cpp/src/sensor_packet_encode_example.cpp` compares segmented (zero-copy) and contiguous encode for `SensorPacket` and round-trips through decode.
 - `cpp/src/hardware_byte_stream_example.cpp` feeds length-prefixed packets through transport, framing, and stream-runtime decode.
+- `cpp/src/network_transport_example.cpp` sends an encoded `SensorPacket` through Unix sockets and TCP loopback using `FrameChannel` and `UprSession`.
 
 Run them with:
 
@@ -32,6 +35,7 @@ bazel run //examples:upr_demo
 bazel run //examples:market_data_decode_example
 bazel run //examples:sensor_packet_encode_example
 bazel run //examples:hardware_byte_stream_example
+bazel run //examples:network_transport_example
 ```
 
 ## Generated bindings
@@ -49,7 +53,7 @@ python3 examples/generate_bindings.py
 Pure-Python `Codec` plus framing/session helpers. See [`python/README.md`](python/README.md).
 
 ```bash
-pip install -e packages/upr_python
+python3 -m pip install -e packages/upr_python
 cd examples/python
 python3 market_data_demo.py
 ```
@@ -73,9 +77,11 @@ npm run market-data-demo
 | Derived length/count, reserved, alignment | ✅ | ✅ | ✅ |
 | Length-prefixed framing + streaming decode | ✅ | ✅ | ✅ |
 | `UPR1` session handshake + checksums | ✅ | ✅ | ✅ |
+| TCP / Unix socket adapters (`upr_adapters`) | ✅ | — | — |
 | Partial decode (`DecodeFieldMask`) | ✅ | — | — |
 | Segmented / zero-copy encode | ✅ | — | — |
 | Transport + `StreamRuntime`, discovery, workbench | ✅ | — | — |
 
 Features marked “—” are intentionally outside the Python/TypeScript runtime
-surface; the language examples document the recommended alternative inline.
+surface. In Python and TypeScript, bring your own socket/pipe I/O and feed bytes
+through the framing helpers.
