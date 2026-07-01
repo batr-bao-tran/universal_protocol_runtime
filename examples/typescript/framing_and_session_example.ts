@@ -1,18 +1,8 @@
 /**
- * Framing, session handshake and checksum helpers.
+ * Use runtime helpers that operate on raw wire bytes.
  *
- * The schema-driven examples cover encode/decode. This example rounds out the
- * remaining runtime surface that interoperates with the C++ `FrameChannel` and
- * `UprSession`:
- *
- * - length-prefixed framing: `encodeFrame`, `tryReadFrame`, `iterFrames` and the
- *   stateful `FrameDecoder`;
- * - the `UPR1` session handshake: `encodeHandshake` / `decodeHandshake` and
- *   `checkCompatibility`;
- * - the built-in checksum algorithms.
- *
- * None of this needs a schema - it operates on raw payload bytes - so it applies
- * to any protocol you encode with the `Codec`.
+ * Shows length-prefixed framing, streaming frame accumulation, UPR1 handshake
+ * encoding/compatibility checks, and the built-in checksum algorithms.
  */
 
 import {

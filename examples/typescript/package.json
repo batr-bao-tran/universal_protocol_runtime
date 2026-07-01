@@ -2,7 +2,7 @@
   "name": "universal-protocol-runtime-examples",
   "version": "0.1.0",
   "private": true,
-  "description": "Runnable TypeScript examples for the Universal Protocol Runtime, mirroring the C++ examples.",
+  "description": "Runnable TypeScript examples for the Universal Protocol Runtime.",
   "type": "module",
   "dependencies": {
     "universal-protocol-runtime": "file:../../packages/upr_typescript"

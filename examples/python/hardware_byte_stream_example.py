@@ -1,15 +1,7 @@
-"""Python equivalent of ``examples/cpp/src/hardware_byte_stream_example.cpp``.
+"""Decode length-prefixed hardware telemetry from a byte stream.
 
-The C++ example pushes two length-prefixed ``SensorPacket`` frames through a
-``SpanTransport`` (which hands out small chunks) into a ``LengthPrefixedFramer``
-(2-byte little-endian prefix) wired to a ``StreamRuntime`` that decodes each
-reassembled frame.
-
-Python has no ``StreamRuntime``; instead the ``framing`` helpers provide a
-``FrameDecoder`` that accumulates bytes from a transport and yields complete
-payloads. Using ``prefix_width=2`` makes the wire bytes identical to the C++
-``LengthPrefixedFramer`` configuration, so a Python peer interoperates with a
-C++ peer.
+Shows how to wrap encoded payloads in 2-byte length prefixes, feed arbitrary
+transport chunks to ``FrameDecoder``, and decode each completed frame.
 """
 
 from __future__ import annotations
@@ -18,9 +10,9 @@ from universal_protocol_runtime import FrameDecoder, encode_frame
 
 from generated.hardware_telemetry import CODEC
 
-# 2-byte little-endian length prefix, matching the C++ LengthPrefixedFramer.
+# 2-byte little-endian length prefix.
 PREFIX_WIDTH = 2
-# Simulated transport read size, matching the C++ SpanTransport(..., 5).
+# Simulated transport read size.
 TRANSPORT_CHUNK = 5
 
 FIRST_SAMPLES = bytes([0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x23])

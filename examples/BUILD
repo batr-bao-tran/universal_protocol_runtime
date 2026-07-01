@@ -89,3 +89,19 @@ cc_binary(
         "//packages/universal_protocol_runtime",
     ],
 )
+
+cc_binary(
+    name = "network_transport_example",
+    srcs = [
+        "cpp/include/hardware_telemetry_example_support.hpp",
+        "cpp/src/network_transport_example.cpp",
+    ],
+    data = [
+        ":hardware_telemetry_schema",
+        ":hardware_telemetry_yaml_schema",
+    ],
+    deps = [
+        "//packages/universal_protocol_runtime",
+        "//packages/upr_adapters",
+    ],
+)
