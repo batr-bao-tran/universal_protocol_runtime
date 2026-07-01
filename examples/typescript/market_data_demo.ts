@@ -1,27 +1,16 @@
 /**
- * TypeScript equivalent of `examples/cpp/src/upr_demo.cpp`.
+ * Encode and decode fixed-size market-data order messages.
  *
- * The C++ demo loads the `market_data` schema, builds three fixed-size `Order`
- * frames, and streams them through a transport + fixed-size framer + stream
- * runtime.
- *
- * The TypeScript runtime ships a dependency-free `Codec` plus framing helpers
- * rather than the C++ `StreamRuntime`/`SpanTransport`/`FixedSizeFramer`, so this
- * example encodes `Order` messages (producing byte-identical frames) and then
- * reconstructs the "fixed-size framer" by slicing the stream into
- * `ORDER_FRAME_SIZE` chunks.
- *
- * The schema (`examples/schema/market_data.upr`) is shared with the C++ and
- * Python examples.
+ * Shows typed encoding/decoding, enum display values, and manual splitting of a
+ * byte stream into fixed-width frames.
  */
 
-import { PROTOCOL, CODEC, Order } from "./generated/market_data.ts";
+import { PROTOCOL, Order } from "./generated/market_data.ts";
 
-// Every Order is exactly 15 bytes on the wire, which is what the C++ demo feeds
-// to its FixedSizeFramer.
+// Every Order is exactly 15 bytes on the wire.
 const ORDER_FRAME_SIZE = PROTOCOL.messages.find((m) => m.name === "Order")!.minimumSize;
 
-// The wire only carries the numeric enum tag; these names mirror
+// The wire only carries the numeric enum tag; these names come from
 // `examples/schema/order_types.upr` and are used purely for display.
 const SIDE_NAMES: Record<number, string> = { 1: "Buy", 2: "Sell" };
 const ORDER_TYPE_NAMES: Record<number, string> = { 1: "Limit", 2: "Market", 3: "IOC" };
@@ -76,8 +65,7 @@ function main(): void {
     );
   });
 
-  // Frames are interchangeable with the C++ and Python runtimes: the first order
-  // encodes to this exact byte sequence in every language.
+  // The first order encodes to this exact byte sequence in every runtime.
   console.log(`first_frame_hex=${toHex(stream.subarray(0, ORDER_FRAME_SIZE))}`);
 }
 

@@ -1,26 +1,11 @@
 /**
- * TypeScript equivalent of `examples/cpp/src/sensor_packet_encode_example.cpp`.
+ * Encode hardware telemetry packets with derived fields.
  *
- * Encodes a `SensorPacket` from `examples/schema/hardware_telemetry.upr` and
- * round-trips it back through decode. This schema exercises the trickier
- * encoder features:
- *
- * - a reserved, alignment-padded gap (`pad: reserved[2] align(4)`) that the
- *   encoder fills automatically;
- * - a length-prefixed byte blob (`sample_bytes: bytes[sample_bytes_len]`) whose
- *   length field is derived from the data you supply - you never set
- *   `sample_bytes_len` by hand;
- * - a `validate(...)` rule documenting the producer invariant
- *   `sample_bytes_len == sample_count * 4` when `version == 2`.
- *
- * The C++ example also compares the *segmented / zero-copy* builder against the
- * contiguous builder. Zero-copy payload attachment is a C++-only encoder
- * optimisation; the TypeScript/Python runtimes always produce a single
- * contiguous frame, so this example focuses on the contiguous path (which is
- * byte-identical to the C++ contiguous output).
+ * Shows expected constants, reserved/aligned bytes, automatic byte-length
+ * fields, dynamic byte payloads, and a producer-side validation check.
  */
 
-import { CODEC, SensorPacket } from "./generated/hardware_telemetry.ts";
+import { SensorPacket } from "./generated/hardware_telemetry.ts";
 
 const SAMPLE_BYTES = Uint8Array.from([0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x23]);
 
@@ -48,7 +33,7 @@ function main(): void {
     `decoded_sample_count=${decoded.sample_count} decoded_sample_bytes_len=${decoded.sample_bytes_len}`,
   );
 
-  // The validate() rule is a documented producer invariant; mirror the check so
+  // The validate() rule is a documented producer invariant; check it so
   // malformed packets are caught before they hit the wire.
   if (decoded.version === 2 && decoded.sample_bytes_len !== decoded.sample_count! * 4) {
     throw new Error("validate(sample_bytes_len == sample_count * 4) violated");

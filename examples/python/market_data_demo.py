@@ -1,34 +1,19 @@
-"""Python equivalent of ``examples/cpp/src/upr_demo.cpp``.
+"""Encode and decode fixed-size market-data order messages.
 
-The C++ demo loads the ``market_data`` schema, builds three fixed-size ``Order``
-frames, streams them through a transport + fixed-size framer + stream runtime,
-and decodes each one.
-
-The Python (and TypeScript) runtimes ship a pure ``Codec`` plus framing
-helpers rather than the C++ ``StreamRuntime``/``SpanTransport``/``FixedSizeFramer``
-trio, so this example:
-
-* encodes ``Order`` messages with both the dict API and the generated typed
-  dataclass, producing frames that are byte-for-byte identical to the C++ output;
-* reconstructs the C++ "fixed-size framer" by slicing the stream into
-  ``ORDER_FRAME_SIZE`` chunks and decoding each chunk.
-
-The schema (``examples/schema/market_data.upr``) is shared with the C++ and
-TypeScript examples.
+Shows dict-based encoding, typed dataclass decoding, enum display values, and
+manual splitting of a byte stream into fixed-width frames.
 """
 
 from __future__ import annotations
 
-from generated import market_data
-from generated.market_data import CODEC, Order
+from generated.market_data import CODEC, Order, PROTOCOL
 
-# Every Order is exactly 15 bytes on the wire (see the schema), which is what the
-# C++ demo feeds to its FixedSizeFramer.
-ORDER_FRAME_SIZE = market_data.PROTOCOL.message("Order").minimum_size
+# Every Order is exactly 15 bytes on the wire (see the schema).
+ORDER_FRAME_SIZE = PROTOCOL.message("Order").minimum_size
 
 # The schema stores ``side``/``order_type`` as numeric enums. The wire only
-# carries the integer tag, so we mirror the enum names from
-# ``examples/schema/order_types.upr`` here purely for display.
+# carries the integer tag; these names come from
+# ``examples/schema/order_types.upr`` and are used purely for display.
 SIDE_NAMES = {1: "Buy", 2: "Sell"}
 ORDER_TYPE_NAMES = {1: "Limit", 2: "Market", 3: "IOC"}
 
@@ -50,7 +35,7 @@ def build_stream() -> bytes:
 
 
 def split_fixed_frames(stream: bytes, frame_size: int) -> list[bytes]:
-    """Splits a byte stream into equal-size frames (the FixedSizeFramer model)."""
+    """Splits a byte stream into equal-size frames."""
     if frame_size == 0 or len(stream) % frame_size != 0:
         raise ValueError("stream length is not a multiple of the frame size")
     return [stream[offset:offset + frame_size] for offset in range(0, len(stream), frame_size)]
@@ -76,8 +61,7 @@ def main() -> int:
     typed: Order = Order.decode(stream[:ORDER_FRAME_SIZE])
     print(f"typed_order symbol={typed.symbol} quantity={typed.quantity} price={typed.price}")
 
-    # Frames are interchangeable with the C++ runtime: the first order encodes to
-    # this exact byte sequence in every language.
+    # The first order encodes to this exact byte sequence in every runtime.
     print(f"first_frame_hex={stream[:ORDER_FRAME_SIZE].hex()}")
     return 0
 
