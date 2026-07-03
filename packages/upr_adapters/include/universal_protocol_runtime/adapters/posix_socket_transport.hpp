@@ -18,6 +18,10 @@ struct TcpClientOptions {
    * @brief Enables non-blocking mode after connect when true.
    */
   bool non_blocking_after_connect = true;
+  /**
+   * @brief Maximum time in milliseconds to wait for a connect to complete.
+   */
+  int connect_timeout_ms = 5000;
 };
 
 /**

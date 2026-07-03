@@ -26,6 +26,10 @@ struct SocketTransportOptions {
    * @brief Optional receive buffer size in bytes.
    */
   int receive_buffer_bytes = 0;
+  /**
+   * @brief Maximum time in milliseconds to wait for a connect to complete.
+   */
+  int connect_timeout_ms = 5000;
 };
 
 /**

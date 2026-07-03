@@ -15,9 +15,9 @@ workbench output.
 Run all C++ examples from the repository root:
 
 ```bash
-bazel run //examples:upr_demo
-bazel run //examples:market_data_decode_example
-bazel run //examples:sensor_packet_encode_example
-bazel run //examples:hardware_byte_stream_example
-bazel run //examples:network_transport_example
+bazel run //examples/cpp:upr_demo
+bazel run //examples/cpp:market_data_decode_example
+bazel run //examples/cpp:sensor_packet_encode_example
+bazel run //examples/cpp:hardware_byte_stream_example
+bazel run //examples/cpp:network_transport_example
 ```

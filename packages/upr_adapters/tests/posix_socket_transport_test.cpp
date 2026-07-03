@@ -132,8 +132,10 @@ TEST(PosixSocketTransportTest, ReportsConnectionAndClosedSocketFailuresDefensive
   EXPECT_FALSE(closed_wait.ok());
   EXPECT_EQ(closed_wait.status().code(), upr::StatusCode::kInvalidArgument);
 
+  upr::TcpClientOptions bad_host_options;
+  bad_host_options.connect_timeout_ms = 1000;
   upr::StatusOr<upr::PosixSocketTransport> bad_host =
-      upr::PosixSocketTransport::connect_tcp("definitely.invalid", 12345);
+      upr::PosixSocketTransport::connect_tcp("definitely.invalid", 12345, bad_host_options);
   EXPECT_FALSE(bad_host.ok());
 
   const int listener = ::socket(AF_INET, SOCK_STREAM, 0);

@@ -10,7 +10,7 @@ readonly BASELINE_REPORT_SUFFIX="/_coverage/_baseline_report.dat"
 readonly COVERAGE_REPORT_SUFFIX="/_coverage/_coverage_report.dat"
 readonly COVERAGE_OUTPUT_DIR="coverage"
 readonly PYTHON_COVERAGE_REPORT="${COVERAGE_OUTPUT_DIR}/upr_python.lcov"
-readonly TYPESCRIPT_COVERAGE_REPORT="packages/upr_typescript/coverage/lcov.info"
+readonly TYPESCRIPT_COVERAGE_TARGET="//packages/upr_typescript:coverage"
 
 threshold_percent="${1:-$DEFAULT_THRESHOLD_PERCENT}"
 report_path="${2:-}"
@@ -51,8 +51,17 @@ if [[ -z "${report_path}" ]]; then
     --lcov "$(pwd)/${PYTHON_COVERAGE_REPORT}"
   coverage_reports+=("${PYTHON_COVERAGE_REPORT}")
 
-  (cd packages/upr_typescript && npm run coverage)
-  coverage_reports+=("${TYPESCRIPT_COVERAGE_REPORT}")
+  # TypeScript line coverage: runs under V8 coverage and
+  # monocart remaps the compiled dist/*.js back onto src/*.ts.
+  bazel_cmd build "${TYPESCRIPT_COVERAGE_TARGET}"
+  typescript_coverage_report="$(
+    bazel_cmd cquery "${TYPESCRIPT_COVERAGE_TARGET}" --output=files 2>/dev/null | awk 'NR==1 { print; exit }'
+   )"
+  if [[ -z "${typescript_coverage_report}" ]]; then
+    printf 'Failed to locate TypeScript coverage report for %s\n' "${TYPESCRIPT_COVERAGE_TARGET}" >&2
+    exit 1
+  fi
+  coverage_reports+=("${typescript_coverage_report}")
 else
   coverage_reports+=("${report_path}")
 fi

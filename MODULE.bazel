@@ -14,7 +14,41 @@ bazel_dep(name = "crc32c", version = "1.1.0")
 bazel_dep(name = "pybind11_bazel", version = "2.13.6")
 bazel_dep(name = "platforms", version = "1.0.0")
 
+# JavaScript/TypeScript toolchain. The TypeScript runtime is dependency-free and
+# is built with the rules_ts compiler; tests run on the rules_nodejs Node toolchain.
+bazel_dep(name = "aspect_rules_js", version = "2.9.2")
+bazel_dep(name = "aspect_rules_ts", version = "3.8.11")
+bazel_dep(name = "rules_nodejs", version = "6.7.5")
+
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True)
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node", dev_dependency = True)
+node.toolchain(node_version = "22.14.0")
+
+rules_ts_ext = use_extension(
+    "@aspect_rules_ts//ts:extensions.bzl",
+    "ext",
+    dev_dependency = True,
+)
+rules_ts_ext.deps(
+    ts_version = "5.9.3",
+)
+use_repo(rules_ts_ext, "npm_typescript")
+
+npm = use_extension(
+    "@aspect_rules_js//npm:extensions.bzl",
+    "npm",
+    dev_dependency = True,
+)
+npm.npm_translate_lock(
+    name = "npm",
+    data = ["//packages/upr_typescript:package.json"],
+    # pnpm-lock.yaml is regenerated from the package.json manifest.
+    pnpm_lock = "//packages/upr_typescript:pnpm-lock.yaml",
+    update_pnpm_lock = True,
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(

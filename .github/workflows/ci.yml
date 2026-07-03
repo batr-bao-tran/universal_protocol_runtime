@@ -358,17 +358,6 @@ jobs:
           tar -xf "${RUNNER_TEMP}/bazel-repository-cache-ubuntu-24.04.tar" \
             -C "${{ steps.bazel-cache.outputs.repository_cache_dir }}"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: packages/upr_typescript/package-lock.json
-
-      - name: Install TypeScript dependencies
-        working-directory: packages/upr_typescript
-        run: npm ci
-
       - name: Run coverage
         env:
           BAZEL_CI_DISK_CACHE_DIR: ${{ steps.bazel-cache.outputs.disk_cache_dir }}

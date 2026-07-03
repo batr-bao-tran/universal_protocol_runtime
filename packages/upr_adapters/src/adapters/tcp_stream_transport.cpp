@@ -16,6 +16,7 @@ namespace {
 
 using stream_transport_support::close_fd;
 using stream_transport_support::configure_socket_buffers;
+using stream_transport_support::connect_with_timeout;
 using stream_transport_support::send_to_socket;
 using stream_transport_support::set_non_blocking;
 using stream_transport_support::socket_endpoint_string;
@@ -102,7 +103,7 @@ StatusOr<TcpStreamTransport> TcpStreamTransport::connect_to_host(const std::stri
       (void)close_fd(fd);
       continue;
     }
-    if (::connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
+    if (connect_with_timeout(fd, address->ai_addr, address->ai_addrlen, options.connect_timeout_ms).ok()) {
       connected_fd = fd;
       break;
     }
