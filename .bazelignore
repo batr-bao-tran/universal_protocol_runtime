@@ -1,1 +1,4 @@
 .cache
+packages/upr_typescript/node_modules
+packages/upr_typescript/dist
+examples/typescript/node_modules

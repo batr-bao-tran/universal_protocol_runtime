@@ -47,9 +47,8 @@ dist/
 # Node / TypeScript
 node_modules/
 
-# Generated example bindings (regenerate with examples/generate_bindings.py)
-examples/python/generated/
-examples/typescript/generated/
+# rules_js npm_translate_lock action cache (regenerated on demand)
+/.aspect/rules/external_repository_action_cache/
 
 # IDE / editors
 .idea/

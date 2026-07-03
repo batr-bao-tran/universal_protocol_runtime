@@ -113,6 +113,54 @@ jobs:
             echo "checksum=${PKGDIR}.tar.gz.sha256"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build language packages
+        id: langpkg
+        env:
+          BAZEL_CI_DISK_CACHE_DIR: ${{ runner.temp }}/bazel-disk-cache
+          BAZEL_CI_REPOSITORY_CACHE_DIR: ${{ runner.temp }}/bazel-repo-cache
+        run: |
+          set -euo pipefail
+          BAZEL="tools/ci/bazel_ci.sh"
+          BUILD_FLAGS=(--config=linux --compilation_mode=opt --strip=always)
+
+          # Build the Python wheel and the npm package tree entirely via Bazel.
+          "${BAZEL}" build "${BUILD_FLAGS[@]}" \
+            //packages/upr_python:wheel \
+            //packages/upr_typescript:npm_pkg
+
+          mkdir -p dist
+
+          wheel="$(
+            "${BAZEL}" cquery "${BUILD_FLAGS[@]}" //packages/upr_python:wheel \
+              --output=files 2>/dev/null
+          )"
+          cp "${wheel}" dist/
+
+          npm_dir="$(
+            "${BAZEL}" cquery "${BUILD_FLAGS[@]}" //packages/upr_typescript:npm_pkg \
+              --output=files 2>/dev/null
+          )"
+          # The dist/ tree is already built by Bazel, so skip the package's
+          # prepack (tsc) lifecycle script.
+          npm pack "./${npm_dir}" --ignore-scripts --pack-destination dist
+
+          {
+            echo "wheel=$(ls dist/*.whl)"
+            echo "npm_tarball=$(ls dist/*.tgz)"
+            echo "npm_dir=${npm_dir}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -122,5 +170,32 @@ jobs:
           files: |
             ${{ steps.pkg.outputs.package }}
             ${{ steps.pkg.outputs.checksum }}
+            ${{ steps.langpkg.outputs.wheel }}
+            ${{ steps.langpkg.outputs.npm_tarball }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish Python wheel to PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PYPI_TOKEN:-}" ]; then
+            echo "PYPI_API_TOKEN secret not set; skipping PyPI publish."
+            exit 0
+          fi
+          python -m pip install --upgrade twine
+          python -m twine upload --non-interactive \
+            -u __token__ -p "${PYPI_TOKEN}" dist/*.whl
+
+      - name: Publish npm package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN secret not set; skipping npm publish."
+            exit 0
+          fi
+          npm publish "./${{ steps.langpkg.outputs.npm_dir }}" \
+            --ignore-scripts --access public

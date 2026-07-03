@@ -127,7 +127,9 @@ TEST(TcpStreamTransportTest, ReportsConnectionFailureForUnusedPort) {
 }
 
 TEST(TcpStreamTransportTest, ReportsLookupFailureForInvalidHost) {
-  auto connect_result = upr::TcpStreamTransport::connect_to_host("invalid.invalid.upr.test", 12345);
+  upr::TcpTransportOptions options;
+  options.connect_timeout_ms = 1000;
+  auto connect_result = upr::TcpStreamTransport::connect_to_host("invalid.invalid.upr.test", 12345, options);
   EXPECT_FALSE(connect_result.ok());
   EXPECT_EQ(connect_result.status().code(), upr::StatusCode::kIoError);
 }

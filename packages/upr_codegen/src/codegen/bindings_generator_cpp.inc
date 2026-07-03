@@ -176,61 +176,13 @@ bool layout_supports_simple_direct_codec(const CompiledMessage& layout) {
   });
 }
 
-// "General" layouts additionally support nested structs, collections, tagged
-// variants, and presence/condition-gated fields, decoded/encoded by an iterative
-// path that mirrors the dynamic decoder byte-for-byte. Validation rules are not
-// replicated in the direct path, so layouts carrying them fall back to the
-// dynamic decoder to preserve identical accept/reject behavior.
-bool layout_supports_general_direct_codec(const CompiledProtocol& protocol, const CompiledMessage& layout) {
-  std::vector<const CompiledMessage*> pending{&layout};
-  std::unordered_set<size_t> visited_structs;
-
-  const auto enqueue_struct = [&](size_t struct_id) -> bool {
-    if (visited_structs.contains(struct_id)) {
-      return true;
-    }
-    const CompiledMessage* nested = protocol.struct_by_id(struct_id);
-    if (nested == nullptr) {
-      return false;
-    }
-    visited_structs.insert(struct_id);
-    pending.push_back(nested);
-    return true;
-  };
-
-  while (!pending.empty()) {
-    const CompiledMessage& current = *pending.back();
-    pending.pop_back();
-    if (!current.validations().empty() || !checksums_support_direct(current)) {
-      return false;
-    }
-    for (const CompiledField& field : current.fields()) {
-      if (field.kind == FieldKind::kStruct || field.kind == FieldKind::kCollection) {
-        if (!enqueue_struct(field.struct_id)) {
-          return false;
-        }
-      } else if (field.kind == FieldKind::kVariant) {
-        for (const CompiledVariantCase& variant_case : field.variant_cases) {
-          if (!enqueue_struct(variant_case.struct_id)) {
-            return false;
-          }
-        }
-      }
-    }
-  }
-  return true;
-}
-
-// A layout has a direct codec when it qualifies for either the simple fast path
-// or the general path.
-bool layout_supports_direct_value_decode(const CompiledProtocol& protocol, const CompiledMessage& layout) {
-  return layout_supports_simple_direct_codec(layout) || layout_supports_general_direct_codec(protocol, layout);
-}
-
-// True when the layout uses the general path (owned nested Value members) rather
-// than the simple fast path.
-bool layout_uses_general_direct_codec(const CompiledProtocol& protocol, const CompiledMessage& layout) {
-  return !layout_supports_simple_direct_codec(layout) && layout_supports_general_direct_codec(protocol, layout);
+// Every compiled layout has a direct codec: the simple fast path handles pure
+// scalar layouts, and the general path handles everything else (nested structs,
+// collections, tagged variants, presence/condition-gated fields, and validation
+// rules), decoded/encoded by an iterative path that mirrors the dynamic decoder
+// byte-for-byte. A layout uses the general path whenever it is not simple.
+bool layout_uses_general_direct_codec(const CompiledMessage& layout) {
+  return !layout_supports_simple_direct_codec(layout);
 }
 
 std::string struct_type_name(const CompiledProtocol& protocol, size_t struct_id) {
@@ -1229,6 +1181,13 @@ void append_cpp_general_direct_decode_function(
     append_line(out, b, "}");
   }
 
+  if (!layout.validations().empty()) {
+    append_line(out, b, "if (!validations_pass(*value)) {");
+    append_cpp_decode_error_set(out, b + 1, "kSchemaMismatch", "\"\"", "offset");
+    append_line(out, b + 1, "return universal_protocol_runtime::DecodeStatus::kSchemaMismatch;");
+    append_line(out, b, "}");
+  }
+
   append_line(out, b, "if (bytes_consumed != nullptr) {");
   append_line(out, b + 1, "*bytes_consumed = offset;");
   append_line(out, b, "}");
@@ -1241,22 +1200,7 @@ void append_cpp_direct_decode_function(std::string* out,
                                        const CompiledProtocol& protocol,
                                        const CompiledMessage& layout,
                                        bool is_message,
-                                       bool supports_direct,
                                        int indent) {
-  append_line(
-      out,
-      indent,
-      "static constexpr bool kSupportsDirectValueDecode = " + std::string(supports_direct ? "true" : "false") + ";");
-  if (!supports_direct) {
-    append_line(out, indent, "static universal_protocol_runtime::DecodeStatus decode_value_direct(");
-    append_line(out, indent + 1, "universal_protocol_runtime::ByteSpan /*frame*/,");
-    append_line(out, indent + 1, "Value* /*value*/,");
-    append_line(out, indent + 1, "std::size_t* /*bytes_consumed*/ = nullptr,");
-    append_line(out, indent + 1, "universal_protocol_runtime::DecodeError* /*error*/ = nullptr) {");
-    append_line(out, indent + 1, "return universal_protocol_runtime::DecodeStatus::kInvalidData;");
-    append_line(out, indent, "}");
-    return;
-  }
   if (layout_supports_simple_direct_codec(layout)) {
     append_cpp_simple_direct_decode_function(out, layout, is_message, indent);
   } else {
@@ -1875,6 +1819,12 @@ void append_cpp_general_direct_encode_function(std::string* out,
                     ");");
   }
 
+  if (!layout.validations().empty()) {
+    append_line(out, b, "if (!validations_pass(value)) {");
+    append_line(out, b + 1, "return universal_protocol_runtime::EncodeStatus::kInvalidData;");
+    append_line(out, b, "}");
+  }
+
   append_line(out, b, "if (bytes_written != nullptr) {");
   append_line(out, b + 1, "*bytes_written = offset;");
   append_line(out, b, "}");
@@ -1885,21 +1835,7 @@ void append_cpp_general_direct_encode_function(std::string* out,
 void append_cpp_direct_encode_function(std::string* out,
                                        const CompiledProtocol& protocol,
                                        const CompiledMessage& layout,
-                                       bool supports_direct,
                                        int indent) {
-  append_line(
-      out,
-      indent,
-      "static constexpr bool kSupportsDirectValueEncode = " + std::string(supports_direct ? "true" : "false") + ";");
-  if (!supports_direct) {
-    append_line(out, indent, "static universal_protocol_runtime::EncodeStatus encode_value_direct(");
-    append_line(out, indent + 1, "const Value& /*value*/,");
-    append_line(out, indent + 1, "universal_protocol_runtime::MutableByteSpan /*frame*/,");
-    append_line(out, indent + 1, "std::size_t* /*bytes_written*/ = nullptr) {");
-    append_line(out, indent + 1, "return universal_protocol_runtime::EncodeStatus::kInvalidData;");
-    append_line(out, indent, "}");
-    return;
-  }
   if (layout_supports_simple_direct_codec(layout)) {
     append_cpp_simple_direct_encode_function(out, layout, indent);
   } else {
@@ -1919,10 +1855,7 @@ void append_cpp_encoder_binding_class(std::string* out, const CompiledMessage& /
   append_line(out, indent + 2, "if (!available()) {");
   append_line(out, indent + 3, "return universal_protocol_runtime::EncodeStatus::kSchemaMismatch;");
   append_line(out, indent + 2, "}");
-  append_line(out, indent + 2, "if constexpr (kSupportsDirectValueEncode) {");
   append_line(out, indent + 3, "return encode_value_direct(value, frame, bytes_written);");
-  append_line(out, indent + 2, "}");
-  append_line(out, indent + 2, "return universal_protocol_runtime::EncodeStatus::kInvalidData;");
   append_line(out, indent + 1, "}");
   append_line(out, indent, " private:");
   append_line(out, indent + 1, "const universal_protocol_runtime::CompiledMessage* layout_ = nullptr;");
@@ -1978,13 +1911,70 @@ void append_cpp_decode_sequence_function(std::string* out, int indent) {
   append_line(out, indent, "}");
 }
 
+std::string_view cpp_validation_operator_symbol(CompiledValidationOperator op) {
+  switch (op) {
+    case CompiledValidationOperator::kEq:
+      return "==";
+    case CompiledValidationOperator::kNe:
+      return "!=";
+    case CompiledValidationOperator::kLt:
+      return "<";
+    case CompiledValidationOperator::kLe:
+      return "<=";
+    case CompiledValidationOperator::kGt:
+      return ">";
+    case CompiledValidationOperator::kGe:
+      return ">=";
+  }
+  return "==";
+}
+
+// Emits validations_pass(), a byte-for-byte mirror of the runtime validation
+// loop over a decoded/encoded Value. The compiler guarantees every operand is an
+// unsigned or enum field, so each reads back as uint64_t.
+void append_cpp_validations_pass_function(std::string* out, const CompiledMessage& layout, int indent) {
+  append_line(out, indent, "static bool validations_pass(const Value& value) {");
+  for (const CompiledValidationRule& rule : layout.validations()) {
+    const std::string lhs_member = sanitize_namespace_name(layout.fields()[rule.field_id].name);
+    append_line(out, indent + 1, "{");
+    int cb = indent + 2;
+    if (rule.has_when) {
+      const std::string when_member = sanitize_namespace_name(layout.fields()[rule.when_field_id].name);
+      append_line(out,
+                  cb,
+                  "if (static_cast<uint64_t>(value." + when_member + ") == " + std::to_string(rule.when_equals) +
+                      "ULL) {");
+      cb += 1;
+    }
+    append_line(out, cb, "const uint64_t lhs = static_cast<uint64_t>(value." + lhs_member + ");");
+    if (rule.compare_to_field) {
+      const std::string rhs_member = sanitize_namespace_name(layout.fields()[rule.other_field_id].name);
+      append_line(out, cb, "uint64_t rhs = static_cast<uint64_t>(value." + rhs_member + ");");
+    } else {
+      append_line(out, cb, "uint64_t rhs = " + std::to_string(rule.value) + "ULL;");
+    }
+    if (rule.multiplier != 1U) {
+      append_line(out, cb, "rhs *= " + std::to_string(rule.multiplier) + "ULL;");
+    }
+    append_line(out, cb, "if (!(lhs " + std::string(cpp_validation_operator_symbol(rule.op)) + " rhs)) {");
+    append_line(out, cb + 1, "return false;");
+    append_line(out, cb, "}");
+    if (rule.has_when) {
+      cb -= 1;
+      append_line(out, cb, "}");
+    }
+    append_line(out, indent + 1, "}");
+  }
+  append_line(out, indent + 1, "return true;");
+  append_line(out, indent, "}");
+}
+
 void append_cpp_view_binding(std::string* out,
                              const CompiledProtocol& protocol,
                              const CompiledMessage& layout,
                              bool is_message,
-                             bool supports_direct_value_decode,
                              int indent) {
-  const bool general = layout_uses_general_direct_codec(protocol, layout);
+  const bool general = layout_uses_general_direct_codec(layout);
   append_line(
       out,
       indent,
@@ -1994,11 +1984,12 @@ void append_cpp_view_binding(std::string* out,
     append_cpp_value_field(out, protocol, field, general, indent + 1);
   }
   append_line(out, indent, "};");
-  append_cpp_direct_decode_function(out, protocol, layout, is_message, supports_direct_value_decode, indent);
-  append_cpp_direct_encode_function(out, protocol, layout, supports_direct_value_decode, indent);
-  if (supports_direct_value_decode) {
-    append_cpp_decode_sequence_function(out, indent);
+  if (!layout.validations().empty()) {
+    append_cpp_validations_pass_function(out, layout, indent);
   }
+  append_cpp_direct_decode_function(out, protocol, layout, is_message, indent);
+  append_cpp_direct_encode_function(out, protocol, layout, indent);
+  append_cpp_decode_sequence_function(out, indent);
   append_line(out);
   append_line(out, indent, "class View final {");
   append_line(out, indent, " public:");
@@ -2062,11 +2053,7 @@ void append_cpp_view_binding(std::string* out,
               "if (error != nullptr) { *error = {universal_protocol_runtime::DecodeStatus::kInvalidData, \"\", 0}; }");
   append_line(out, indent + 3, "return universal_protocol_runtime::DecodeStatus::kInvalidData;");
   append_line(out, indent + 2, "}");
-  append_line(out, indent + 2, "if constexpr (kSupportsDirectValueDecode) {");
-  append_line(out, indent + 3, "return decode_value_direct(frame, value, nullptr, error);");
-  append_line(out, indent + 2, "}");
-  append_line(out, indent + 2, "universal_protocol_runtime::DecodedMessage decoded;");
-  append_line(out, indent + 2, "return decode_value(frame, &decoded, value);");
+  append_line(out, indent + 2, "return decode_value_direct(frame, value, nullptr, error);");
   append_line(out, indent + 1, "}");
   append_line(out,
               indent + 1,
@@ -2121,7 +2108,6 @@ void append_cpp_layout_binding(std::string* out,
                                const CompiledProtocol& protocol,
                                const CompiledMessage& layout,
                                bool is_message,
-                               bool supports_direct_value_decode,
                                int indent) {
   append_line(out, indent, "struct " + sanitize_type_name(layout.name()) + " final {");
   append_line(
@@ -2175,6 +2161,6 @@ void append_cpp_layout_binding(std::string* out,
                            layout.checksums(),
                            cpp_checksum_binding_literal,
                            indent + 1);
-  append_cpp_view_binding(out, protocol, layout, is_message, supports_direct_value_decode, indent + 1);
+  append_cpp_view_binding(out, protocol, layout, is_message, indent + 1);
   append_line(out, indent, "};");
 }

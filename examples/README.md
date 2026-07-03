@@ -31,41 +31,35 @@ Full C++ runtime examples. See [`cpp/README.md`](cpp/README.md).
 Run them with:
 
 ```bash
-bazel run //examples:upr_demo
-bazel run //examples:market_data_decode_example
-bazel run //examples:sensor_packet_encode_example
-bazel run //examples:hardware_byte_stream_example
-bazel run //examples:network_transport_example
+bazel run //examples/cpp:upr_demo
+bazel run //examples/cpp:market_data_decode_example
+bazel run //examples/cpp:sensor_packet_encode_example
+bazel run //examples/cpp:hardware_byte_stream_example
+bazel run //examples/cpp:network_transport_example
 ```
 
 ## Generated bindings
 
 The Python and TypeScript examples import protocol modules generated from the
-shared schemas. These `generated/` folders are **not** committed — generate them
-once after checkout (and again whenever a schema changes):
-
-```bash
-python3 examples/generate_bindings.py
-```
+shared schemas. Bazel generates them as build outputs (under `bazel-bin/`, not
+committed) whenever you build or run an example — no manual step required.
 
 ## Python
 
-Pure-Python `Codec` plus framing/session helpers. See [`python/README.md`](python/README.md).
+Native-backed generated codecs plus pure-Python framing/session helpers, run
+entirely by Bazel. See [`python/README.md`](python/README.md).
 
 ```bash
-python3 -m pip install -e packages/upr_python
-cd examples/python
-python3 market_data_demo.py
+bazel run //examples/python:market_data_demo
 ```
 
 ## TypeScript
 
 Dependency-free `Codec` plus framing/session helpers. See [`typescript/README.md`](typescript/README.md).
+Built and run entirely by Bazel (no `npm install`):
 
 ```bash
-cd examples/typescript
-npm install && npm run build:runtime
-npm run market-data-demo
+bazel run //examples/typescript:market_data_demo
 ```
 
 ## Feature coverage across languages

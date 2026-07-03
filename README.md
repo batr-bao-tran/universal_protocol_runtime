@@ -121,15 +121,15 @@ bazel test //...
 Run the example:
 
 ```bash
-bazel run //examples:upr_demo
+bazel run //examples/cpp:upr_demo
 ```
 
 Run the split examples:
 
 ```bash
-bazel run //examples:market_data_decode_example
-bazel run //examples:sensor_packet_encode_example
-bazel run //examples:hardware_byte_stream_example
+bazel run //examples/cpp:market_data_decode_example
+bazel run //examples/cpp:sensor_packet_encode_example
+bazel run //examples/cpp:hardware_byte_stream_example
 ```
 
 ## Repository Layout

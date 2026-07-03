@@ -290,9 +290,7 @@ TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   EXPECT_NE(generated.value().find("std::optional<std::span<const char, 4>> symbol() const {"), std::string::npos);
   EXPECT_NE(generated.value().find("#include \"universal_protocol_runtime/decoder/direct_decode_support.hpp\""),
             std::string::npos);
-  EXPECT_NE(generated.value().find("static constexpr bool kSupportsDirectValueDecode = true;"), std::string::npos);
   EXPECT_NE(generated.value().find("decode_value_direct("), std::string::npos);
-  EXPECT_NE(generated.value().find("if constexpr (kSupportsDirectValueDecode) {"), std::string::npos);
   EXPECT_NE(generated.value().find("direct_decode_support::starts_with(frame, kDispatchPrefix)"), std::string::npos);
   EXPECT_NE(generated.value().find("direct_decode_support::read_unsigned_scalar<"), std::string::npos);
   EXPECT_NE(generated.value().find("direct_decode_support::runtime_validate_string<"), std::string::npos);
@@ -311,7 +309,7 @@ TEST(BindingsGeneratorTest, GeneratesCppBindingsForMessagesAndStructs) {
   EXPECT_NE(generated.value().find(".algorithm_name = \"xor8\""), std::string::npos);
 }
 
-TEST(BindingsGeneratorTest, SimpleDirectPathExcludesLayoutsWithExtraSemantics) {
+TEST(BindingsGeneratorTest, GeneralDirectPathHandlesLayoutsWithExtraSemantics) {
   const upr::CompiledProtocol compiled =
       upr_test_support::compile_protocol_or_throw(make_simple_direct_exclusion_definition());
 
@@ -326,22 +324,22 @@ TEST(BindingsGeneratorTest, SimpleDirectPathExcludesLayoutsWithExtraSemantics) {
   ASSERT_NE(aligned, std::string::npos);
   ASSERT_NE(reserved, std::string::npos);
 
-  const std::size_t validated_direct =
-      text.find("static constexpr bool kSupportsDirectValueDecode = false;", validated);
-  EXPECT_LT(validated_direct, aligned);
+  // Layouts carrying validation rules take the general direct path, which emits
+  // a validations_pass() mirror of the runtime and calls it from decode/encode.
+  const std::size_t validated_pass = text.find("static bool validations_pass(const Value& value) {", validated);
+  EXPECT_LT(validated_pass, aligned);
+  EXPECT_LT(text.find("if (!validations_pass(*value)) {", validated), aligned);
+  EXPECT_LT(text.find("if (!validations_pass(value)) {", validated), aligned);
 
-  const std::size_t aligned_direct = text.find("static constexpr bool kSupportsDirectValueDecode = true;", aligned);
+  // Alignment- and reserved-byte layouts also decode through the general path.
   const std::size_t aligned_align = text.find("const std::size_t aligned_offset", aligned);
-  EXPECT_LT(aligned_direct, reserved);
   EXPECT_LT(aligned_align, reserved);
 
-  const std::size_t reserved_direct = text.find("static constexpr bool kSupportsDirectValueDecode = true;", reserved);
   const std::size_t reserved_check = text.find("_reserved_byte", reserved);
-  EXPECT_NE(reserved_direct, std::string::npos);
   EXPECT_NE(reserved_check, std::string::npos);
 }
 
-TEST(BindingsGeneratorTest, FallbackValueBindingsCoverAllFieldKinds) {
+TEST(BindingsGeneratorTest, GeneralDirectValueBindingsCoverAllFieldKinds) {
   const upr::CompiledProtocol compiled =
       upr_test_support::compile_protocol_or_throw(make_fallback_all_kinds_codegen_definition());
 
@@ -354,15 +352,19 @@ TEST(BindingsGeneratorTest, FallbackValueBindingsCoverAllFieldKinds) {
   ASSERT_TRUE(ts_generated.ok()) << ts_generated.status().message();
 
   const std::string& cpp = cpp_generated.value();
-  EXPECT_NE(cpp.find("static constexpr bool kSupportsDirectValueDecode = false;"), std::string::npos);
+  // A layout mixing every field kind with a validation rule takes the general
+  // direct path: scalars/bytes/strings stay borrowed, nested types are owned,
+  // and the validation is enforced via validations_pass().
+  EXPECT_NE(cpp.find("static bool validations_pass(const Value& value) {"), std::string::npos);
   EXPECT_NE(cpp.find("int16_t signed_value = 0;"), std::string::npos);
   EXPECT_NE(cpp.find("float price32 = 0.0;"), std::string::npos);
   EXPECT_NE(cpp.find("double price64 = 0.0;"), std::string::npos);
   EXPECT_NE(cpp.find("universal_protocol_runtime::ByteSpan raw;"), std::string::npos);
   EXPECT_NE(cpp.find("std::string_view symbol;"), std::string::npos);
-  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedMessage body;"), std::string::npos);
-  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedCollectionView levels;"), std::string::npos);
-  EXPECT_NE(cpp.find("universal_protocol_runtime::DecodedMessage detail;"), std::string::npos);
+  EXPECT_NE(cpp.find("structs::OuterBody::Value body;"), std::string::npos);
+  EXPECT_NE(cpp.find("std::vector<structs::Level::Value> levels;"), std::string::npos);
+  EXPECT_NE(cpp.find("std::variant<std::monostate, structs::QuoteDetail::Value, structs::TradeDetail::Value> detail;"),
+            std::string::npos);
 
   EXPECT_NE(python_generated.value().find("body: Optional[\"OuterBody\"] = None"), std::string::npos);
   EXPECT_NE(python_generated.value().find("levels: List[\"Level\"] = _field(default_factory=list)"), std::string::npos);
@@ -590,7 +592,6 @@ TEST(BindingsGeneratorTest, GeneratesTypedBindingsForDigitPrefixedNamesStructsAn
   EXPECT_NE(cpp_generated.value().find("structs::N1NestedBody::encode_value_direct(value.generated_7_body,"),
             std::string::npos);
   EXPECT_NE(cpp_generated.value().find("FieldKind::kStruct"), std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = true;"), std::string::npos);
 
   EXPECT_NE(python_generated.value().find("class N123Snapshot:"), std::string::npos);
   EXPECT_NE(python_generated.value().find("N_4_RAW_BYTES = 2"), std::string::npos);
@@ -630,7 +631,6 @@ TEST(BindingsGeneratorTest, GeneratesBindingsForCollectionsVariantsAndConditiona
             std::string::npos);
   EXPECT_NE(cpp_generated.value().find("const bool revision_present = (static_cast<uint64_t>(value->kind) == 2ULL)"),
             std::string::npos);
-  EXPECT_NE(cpp_generated.value().find("static constexpr bool kSupportsDirectValueDecode = true;"), std::string::npos);
   EXPECT_NE(python_generated.value().find("kind=\"collection\""), std::string::npos);
   EXPECT_NE(python_generated.value().find("kind=\"variant\""), std::string::npos);
   EXPECT_NE(ts_generated.value().find("detail?: QuoteDetail | TradeDetail;"), std::string::npos);
@@ -739,6 +739,68 @@ TEST(BindingsGeneratorTest, GeneratesChecksumHelpersForBuiltInAlgorithms) {
   EXPECT_NE(cpp_generated.value().find("runtime_checksum_crc32"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("runtime_checksum_crc32c"), std::string::npos);
   EXPECT_NE(cpp_generated.value().find("checksum_sum16_fixed<"), std::string::npos);
+}
+
+struct ValidationOperatorCase {
+  upr::ValidationOperator op;
+  std::string symbol;
+};
+
+class BindingsGeneratorValidationOperatorTest : public testing::TestWithParam<ValidationOperatorCase> {};
+
+TEST_P(BindingsGeneratorValidationOperatorTest, EmitsComparisonSymbolInValidationsPass) {
+  const ValidationOperatorCase& param = GetParam();
+  upr::ProtocolDefinition definition = upr_test_support::make_protocol(
+      "validation_ops",
+      {upr_test_support::make_message("Validated",
+                                      {upr_test_support::make_scalar_field("value", upr::FieldKind::kUnsigned, 1)},
+                                      {upr_test_support::make_validation_against_value("value", param.op, 1)})});
+
+  const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(definition);
+  upr::StatusOr<std::string> generated = upr::generate_cpp_bindings_header(compiled);
+
+  ASSERT_TRUE(generated.ok()) << generated.status().message();
+  EXPECT_NE(generated.value().find("static bool validations_pass(const Value& value) {"), std::string::npos);
+  EXPECT_NE(generated.value().find("if (!(lhs " + param.symbol + " rhs)) {"), std::string::npos);
+}
+
+INSTANTIATE_TEST_SUITE_P(AllOperators,
+                         BindingsGeneratorValidationOperatorTest,
+                         testing::Values(ValidationOperatorCase{upr::ValidationOperator::kEq, "=="},
+                                         ValidationOperatorCase{upr::ValidationOperator::kNe, "!="},
+                                         ValidationOperatorCase{upr::ValidationOperator::kLt, "<"},
+                                         ValidationOperatorCase{upr::ValidationOperator::kLe, "<="},
+                                         ValidationOperatorCase{upr::ValidationOperator::kGt, ">"},
+                                         ValidationOperatorCase{upr::ValidationOperator::kGe, ">="}));
+
+TEST(BindingsGeneratorTest, EmitsGuardedFieldComparisonAndMultiplierInValidationsPass) {
+  upr::ValidationRuleDefinition scaled_field =
+      upr_test_support::make_validation_against_field("total", upr::ValidationOperator::kEq, "count", 4);
+  upr::ValidationRuleDefinition guarded =
+      upr_test_support::make_validation_against_value("total", upr::ValidationOperator::kGe, 0);
+  upr_test_support::set_validation_condition(&guarded, "version", 2);
+
+  upr::ProtocolDefinition definition = upr_test_support::make_protocol(
+      "validation_shapes",
+      {upr_test_support::make_message("Guarded",
+                                      {
+                                          upr_test_support::make_scalar_field("version", upr::FieldKind::kUnsigned, 1),
+                                          upr_test_support::make_scalar_field("count", upr::FieldKind::kUnsigned, 1),
+                                          upr_test_support::make_scalar_field("total", upr::FieldKind::kUnsigned, 2),
+                                      },
+                                      {scaled_field, guarded})});
+
+  const upr::CompiledProtocol compiled = upr_test_support::compile_protocol_or_throw(definition);
+  upr::StatusOr<std::string> generated = upr::generate_cpp_bindings_header(compiled);
+
+  ASSERT_TRUE(generated.ok()) << generated.status().message();
+  const std::string& text = generated.value();
+  // Field-to-field comparison reads the compared field back as uint64_t.
+  EXPECT_NE(text.find("uint64_t rhs = static_cast<uint64_t>(value.count);"), std::string::npos);
+  // A non-unit multiplier scales the right-hand side.
+  EXPECT_NE(text.find("rhs *= 4ULL;"), std::string::npos);
+  // A `when` condition wraps the comparison in a guard.
+  EXPECT_NE(text.find("if (static_cast<uint64_t>(value.version) == 2ULL) {"), std::string::npos);
 }
 
 }  // namespace

@@ -92,15 +92,14 @@ StatusOr<std::string> generate_cpp_bindings_header(const CompiledProtocol& proto
     if (struct_layout == nullptr) {
       continue;
     }
-    append_cpp_layout_binding(
-        &out, protocol, *struct_layout, false, layout_supports_direct_value_decode(protocol, *struct_layout), 1);
+    append_cpp_layout_binding(&out, protocol, *struct_layout, false, 1);
     append_line(&out);
   }
   append_line(&out, 0, "}  // namespace structs");
   append_line(&out);
   append_line(&out, 0, "namespace messages {");
   for (const CompiledMessage& message : protocol.messages()) {
-    append_cpp_layout_binding(&out, protocol, message, true, layout_supports_direct_value_decode(protocol, message), 1);
+    append_cpp_layout_binding(&out, protocol, message, true, 1);
     append_line(&out);
   }
   append_line(&out, 0, "}  // namespace messages");
