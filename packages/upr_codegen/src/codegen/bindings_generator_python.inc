@@ -476,9 +476,6 @@ void append_python_native_to_py_function(std::string* out, const CompiledProtoco
               "py::dict " + native_to_py_name(layout) + "(const " + native_value_type(protocol, layout) + "& value) {");
   append_line(out, 1, "py::dict result;");
   for (const CompiledField& field : layout.fields()) {
-    if (field.is_reserved) {
-      continue;
-    }
     const std::string present = cpp_presence_condition_expression(layout, field, "value.");
     if (present != "true") {
       append_line(out, 1, "if (" + present + ") {");

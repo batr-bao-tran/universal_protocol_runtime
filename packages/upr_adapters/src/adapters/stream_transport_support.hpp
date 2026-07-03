@@ -73,6 +73,59 @@ inline StatusOr<bool> wait_for_fd(int fd, short events, int timeout_ms) {
 }
 
 /**
+ * @brief Connects a socket with a bounded timeout.
+ * @param fd Socket file descriptor to connect.
+ * @param address Destination address.
+ * @param address_length Size of the destination address.
+ * @param timeout_ms Maximum time to wait for the connection to complete.
+ * @return Ok status on success; an error status on failure or timeout.
+ *
+ * The socket is switched to non-blocking for the duration of the attempt so a
+ * dropped or unreachable peer cannot stall the caller, then its original flags
+ * are restored for the caller to apply its final mode.
+ */
+inline Status connect_with_timeout(int fd, const sockaddr* address, socklen_t address_length, int timeout_ms) {
+  const int existing_flags = ::fcntl(fd, F_GETFL, 0);
+  if (existing_flags < 0) {
+    return status_from_errno("fcntl(F_GETFL)");
+  }
+  if (::fcntl(fd, F_SETFL, existing_flags | O_NONBLOCK) < 0) {
+    return status_from_errno("fcntl(F_SETFL)");
+  }
+
+  int connect_result;
+  do {
+    connect_result = ::connect(fd, address, address_length);
+  } while (connect_result < 0 && errno == EINTR);
+
+  Status status = Status::ok_status();
+  if (connect_result < 0 && (errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK)) {
+    const StatusOr<bool> ready = wait_for_fd(fd, POLLOUT, timeout_ms);
+    if (!ready.ok()) {
+      status = ready.status();
+    } else if (!ready.value()) {
+      status = io_error("connect timed out");
+    } else {
+      int socket_error = 0;
+      socklen_t error_length = sizeof(socket_error);
+      if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) < 0) {
+        status = status_from_errno("getsockopt(SO_ERROR)");
+      } else if (socket_error != 0) {
+        errno = socket_error;
+        status = status_from_errno("connect");
+      }
+    }
+  } else if (connect_result < 0) {
+    status = status_from_errno("connect");
+  }
+
+  if (::fcntl(fd, F_SETFL, existing_flags) < 0) {
+    return status_from_errno("fcntl(F_SETFL restore)");
+  }
+  return status;
+}
+
+/**
  * @brief Reads from a file descriptor into a destination span.
  * @param fd File descriptor to read from.
  * @param destination Destination byte span.

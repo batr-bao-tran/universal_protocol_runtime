@@ -44,26 +44,9 @@ const char* require_value(int argc, char** argv, int* index, std::string_view op
   return argv[*index];
 }
 
-std::string directory_name(const std::string& path) {
-  const std::size_t slash = path.find_last_of("/\\");
-  if (slash == std::string::npos) {
-    return {};
-  }
-  return path.substr(0, slash + 1U);
-}
-
 std::string base_name(const std::string& path) {
   const std::size_t slash = path.find_last_of("/\\");
   return slash == std::string::npos ? path : path.substr(slash + 1U);
-}
-
-std::string stem_name(const std::string& path) {
-  std::string base = base_name(path);
-  const std::size_t dot = base.find_last_of('.');
-  if (dot != std::string::npos) {
-    base.resize(dot);
-  }
-  return base.empty() ? "generated_protocol" : base;
 }
 
 }  // namespace
@@ -126,18 +109,8 @@ int main(int argc, char** argv) {
   if (output_path.empty()) {
     return fail("Missing required --output path.");
   }
-  if (language == "python") {
-    const std::string output_dir = directory_name(output_path);
-    const std::string output_stem = stem_name(output_path);
-    if (native_output_path.empty()) {
-      native_output_path = output_dir + "_" + output_stem + "_native.cpp";
-    }
-    if (native_header_output_path.empty()) {
-      native_header_output_path = output_dir + output_stem + "_native.hpp";
-    }
-    if (python_options.native_header_include.empty()) {
-      python_options.native_header_include = base_name(native_header_output_path);
-    }
+  if (language == "python" && !native_header_output_path.empty() && python_options.native_header_include.empty()) {
+    python_options.native_header_include = base_name(native_header_output_path);
   }
 
   upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_file(input_path);

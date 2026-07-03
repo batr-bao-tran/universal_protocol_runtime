@@ -53,6 +53,53 @@ StatusOr<bool> wait_for_readable(int fd, int timeout_ms) {
   return status_from_errno("poll");  // LCOV_EXCL_LINE
 }
 
+Status connect_with_timeout(int fd, const sockaddr* address, socklen_t address_length, int timeout_ms) {
+  const int existing_flags = ::fcntl(fd, F_GETFL, 0);
+  if (existing_flags < 0) {
+    return status_from_errno("fcntl(F_GETFL)");
+  }
+  if (::fcntl(fd, F_SETFL, existing_flags | O_NONBLOCK) < 0) {
+    return status_from_errno("fcntl(F_SETFL)");
+  }
+
+  int connect_result;
+  do {
+    connect_result = ::connect(fd, address, address_length);
+  } while (connect_result < 0 && UPR_UNLIKELY(errno == EINTR));
+
+  Status status = Status::ok_status();
+  if (connect_result < 0 && (errno == EINPROGRESS || errno == EALREADY || errno == EWOULDBLOCK)) {
+    struct pollfd descriptor {
+      .fd = fd, .events = POLLOUT, .revents = 0,
+    };
+    int poll_result;
+    do {
+      poll_result = ::poll(&descriptor, 1, timeout_ms);
+    } while (poll_result < 0 && UPR_UNLIKELY(errno == EINTR));
+    if (poll_result < 0) {
+      status = status_from_errno("poll");  // LCOV_EXCL_LINE
+    } else if (poll_result == 0) {
+      status = io_error("connect timed out");
+    } else {
+      int socket_error = 0;
+      socklen_t error_length = sizeof(socket_error);
+      if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &error_length) < 0) {
+        status = status_from_errno("getsockopt(SO_ERROR)");  // LCOV_EXCL_LINE
+      } else if (socket_error != 0) {
+        errno = socket_error;
+        status = status_from_errno("connect");
+      }
+    }
+  } else if (connect_result < 0) {
+    status = status_from_errno("connect");
+  }
+
+  if (::fcntl(fd, F_SETFL, existing_flags) < 0) {
+    return status_from_errno("fcntl(F_SETFL restore)");  // LCOV_EXCL_LINE
+  }
+  return status;
+}
+
 ReadResult read_from_socket(int fd, MutableByteSpan destination, bool* open_flag) {
   ssize_t bytes_read;
   do {
@@ -135,7 +182,7 @@ StatusOr<PosixSocketTransport> PosixSocketTransport::connect_tcp(const std::stri
     if (fd < 0) {
       continue;
     }
-    if (::connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
+    if (connect_with_timeout(fd, address->ai_addr, address->ai_addrlen, options.connect_timeout_ms).ok()) {
       connected_fd = fd;
       break;
     }

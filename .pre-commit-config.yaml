@@ -35,7 +35,7 @@ repos:
     rev: v15.0.7
     hooks:
       - id: clang-format
-        files: \.(cpp|cxx|c|cc|h|hpp|hxx|txx)$
+        files: \.(cpp|cxx|c|cc|h|hpp|hxx|txx|inc)$
   - repo: local
     hooks:
       - id: clang-tidy-fix

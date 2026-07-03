@@ -19,10 +19,12 @@ session helpers that interoperate byte-for-byte with the C++ runtime.
 pip install universal-protocol-runtime
 ```
 
-For local development from this repository:
+For local development from this repository, build the wheel with Bazel (the
+single source of truth for the package) and install it:
 
 ```bash
-pip install -e packages/upr_python
+bazel build //packages/upr_python:wheel
+pip install bazel-bin/packages/upr_python/*.whl
 ```
 
 ## Generate a protocol module
@@ -30,18 +32,18 @@ pip install -e packages/upr_python
 ```bash
 upr-gen --lang python \
     --input my_protocol.upr \
-    --output my_protocol.py
-# or, before the CLI is on PATH:
-bazel run //packages/upr_codegen:generate_bindings -- \
-    --lang python \
-    --input my_protocol.upr \
-    --output my_protocol.py
+    --output my_protocol.py \
+    --native-output _my_protocol_native.cpp \
+    --native-header-output my_protocol_native.hpp
 ```
 
-This writes `my_protocol.py`, `_my_protocol_native.cpp`, and
-`my_protocol_native.hpp` by default. Build the generated C++ source as a Python
-extension module next to the facade; the facade imports it and exposes the usual
-`CODEC` and typed dataclass APIs.
+This writes the `my_protocol.py` facade plus the `_my_protocol_native.cpp`
+pybind11 codec (and its header). Build the native source as a Python extension
+module next to the facade; the facade imports it and its `CODEC` encodes and
+decodes every layout through the native codec, producing output identical to the
+pure-Python `Codec`. The
+[`upr_python_bindings`](../../tools/upr_python_defs.bzl) Bazel macro wires all of
+this up in one step.
 
 ## Use it
 
