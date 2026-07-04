@@ -1,0 +1,673 @@
+#include "universal_protocol_runtime/pdl/yaml_loader.hpp"
+
+#include <gtest/gtest.h>
+
+#include <cstdlib>
+#include <fstream>
+#include <string>
+
+namespace upr = universal_protocol_runtime;
+
+namespace {
+
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
+
+struct ValidYamlCase {
+  std::string name;
+  std::string yaml;
+  std::string protocol_name;
+  size_t expected_struct_count = 0;
+  std::string message_name;
+  std::string field_name;
+  upr::FieldKind expected_kind = upr::FieldKind::kUnsigned;
+  uint8_t expected_width = 0;
+  upr::ByteOrder expected_byte_order = upr::ByteOrder::kLittleEndian;
+  upr::StringEncoding expected_string_encoding = upr::StringEncoding::kAscii;
+  size_t expected_fixed_size = 0;
+  std::string expected_size_from;
+  std::string expected_referenced_type;
+  bool expected_has_expect = false;
+  uint64_t expected_expect = 0;
+  size_t expected_enum_count = 0;
+  size_t expected_bit_field_count = 0;
+  bool expected_has_checksum = false;
+  std::string expected_checksum_algorithm;
+  bool expected_allow_trailing = false;
+};
+
+class ValidYamlLoaderTest : public ::testing::TestWithParam<ValidYamlCase> {
+ public:
+  ~ValidYamlLoaderTest() noexcept override = default;
+};
+
+TEST_P(ValidYamlLoaderTest, ParsesSupportedFieldDefinitions) {
+  const ValidYamlCase& param = GetParam();
+
+  upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_yaml(param.yaml);
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  ASSERT_EQ(definition.value().name, param.protocol_name);
+  EXPECT_EQ(definition.value().structs.size(), param.expected_struct_count);
+  ASSERT_EQ(definition.value().messages.size(), 1U);
+  const upr::MessageDefinition& message = definition.value().messages.front();
+  EXPECT_EQ(message.name, param.message_name);
+  EXPECT_EQ(message.allow_trailing_bytes, param.expected_allow_trailing);
+  ASSERT_EQ(message.fields.size(), 1U);
+  const upr::FieldDefinition& field = message.fields.front();
+  EXPECT_EQ(field.name, param.field_name);
+  EXPECT_EQ(field.kind, param.expected_kind);
+  EXPECT_EQ(field.width_bytes, param.expected_width);
+  EXPECT_EQ(field.byte_order, param.expected_byte_order);
+  EXPECT_EQ(field.string_encoding, param.expected_string_encoding);
+  EXPECT_EQ(field.fixed_size, param.expected_fixed_size);
+  EXPECT_EQ(field.size_from_field, param.expected_size_from);
+  EXPECT_EQ(field.referenced_type, param.expected_referenced_type);
+  EXPECT_EQ(field.has_expected_unsigned, param.expected_has_expect);
+  EXPECT_EQ(field.expected_unsigned, param.expected_expect);
+  EXPECT_EQ(field.enum_values.size(), param.expected_enum_count);
+  EXPECT_EQ(field.bit_fields.size(), param.expected_bit_field_count);
+  EXPECT_EQ(field.checksum.has_value(), param.expected_has_checksum);
+  if (field.checksum.has_value()) {
+    EXPECT_EQ(field.checksum->algorithm, param.expected_checksum_algorithm);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Coverage,
+                         ValidYamlLoaderTest,
+                         ::testing::Values(
+                             ValidYamlCase{
+                                 .name = "unsigned_big_endian",
+                                 .yaml = R"yaml(
+protocol: telemetry
+messages:
+  - name: Packet
+    fields:
+      - name: length
+        type: uint16_be
+)yaml",
+                                 .protocol_name = "telemetry",
+                                 .message_name = "Packet",
+                                 .field_name = "length",
+                                 .expected_kind = upr::FieldKind::kUnsigned,
+                                 .expected_width = 2,
+                                 .expected_byte_order = upr::ByteOrder::kBigEndian,
+                             },
+                             ValidYamlCase{
+                                 .name = "name_fallback_and_enum_width",
+                                 .yaml = R"yaml(
+name: control
+messages:
+  - name: Status
+    allow_trailing_bytes: true
+    fields:
+      - name: state
+        type: enum
+        width: 1
+        values:
+          1: Ready
+          2: Fault
+)yaml",
+                                 .protocol_name = "control",
+                                 .message_name = "Status",
+                                 .field_name = "state",
+                                 .expected_kind = upr::FieldKind::kEnum,
+                                 .expected_width = 1,
+                                 .expected_enum_count = 2,
+                                 .expected_allow_trailing = true,
+                             },
+                             ValidYamlCase{
+                                 .name = "dynamic_bytes",
+                                 .yaml = R"yaml(
+protocol: capture
+messages:
+  - name: Blob
+    fields:
+      - name: payload
+        type: bytes
+        size_from: length
+)yaml",
+                                 .protocol_name = "capture",
+                                 .message_name = "Blob",
+                                 .field_name = "payload",
+                                 .expected_kind = upr::FieldKind::kBytes,
+                                 .expected_size_from = "length",
+                             },
+                             ValidYamlCase{
+                                 .name = "string_with_utf8_encoding",
+                                 .yaml = R"yaml(
+protocol: text
+messages:
+  - name: Packet
+    fields:
+      - name: symbol
+        type: string
+        encoding: utf8
+        size: 8
+)yaml",
+                                 .protocol_name = "text",
+                                 .message_name = "Packet",
+                                 .field_name = "symbol",
+                                 .expected_kind = upr::FieldKind::kString,
+                                 .expected_string_encoding = upr::StringEncoding::kUtf8,
+                                 .expected_fixed_size = 8,
+                             },
+                             ValidYamlCase{
+                                 .name = "string_with_ascii_encoding_and_expect",
+                                 .yaml = R"yaml(
+protocol: ascii_text
+messages:
+  - name: Packet
+    fields:
+      - name: symbol
+        type: string
+        encoding: ascii
+        size: 4
+        expect: 7
+)yaml",
+                                 .protocol_name = "ascii_text",
+                                 .message_name = "Packet",
+                                 .field_name = "symbol",
+                                 .expected_kind = upr::FieldKind::kString,
+                                 .expected_string_encoding = upr::StringEncoding::kAscii,
+                                 .expected_fixed_size = 4,
+                                 .expected_has_expect = true,
+                                 .expected_expect = 7,
+                             },
+                             ValidYamlCase{
+                                 .name = "custom_struct_reference",
+                                 .yaml = R"yaml(
+protocol: nested
+structs:
+  - name: Order
+    fields:
+      - name: price
+        type: uint32
+messages:
+  - name: Orders
+    fields:
+      - name: order
+        type: Order
+)yaml",
+                                 .protocol_name = "nested",
+                                 .expected_struct_count = 1,
+                                 .message_name = "Orders",
+                                 .field_name = "order",
+                                 .expected_kind = upr::FieldKind::kStruct,
+                                 .expected_referenced_type = "Order",
+                             },
+                             ValidYamlCase{
+                                 .name = "bitfields_with_signed_enum_values",
+                                 .yaml = R"yaml(
+protocol: signed_bits
+messages:
+  - name: Packet
+    fields:
+      - name: header
+        type: uint8
+        bits:
+          - name: delta
+            offset: 4
+            width: 4
+            signed: true
+            values:
+              15: NegativeOne
+)yaml",
+                                 .protocol_name = "signed_bits",
+                                 .message_name = "Packet",
+                                 .field_name = "header",
+                                 .expected_kind = upr::FieldKind::kUnsigned,
+                                 .expected_width = 1,
+                                 .expected_bit_field_count = 1,
+                             },
+                             ValidYamlCase{
+                                 .name = "bitfields_and_checksum",
+                                 .yaml = R"yaml(
+protocol: framed
+messages:
+  - name: Packet
+    fields:
+      - name: header
+        type: uint16_be
+        bits:
+          - name: version
+            offset: 13
+            width: 3
+          - name: kind
+            offset: 0
+            width: 12
+        checksum:
+          algorithm: crc16_ccitt
+          from: frame_start
+          to: before_self
+)yaml",
+                                 .protocol_name = "framed",
+                                 .message_name = "Packet",
+                                 .field_name = "header",
+                                 .expected_kind = upr::FieldKind::kUnsigned,
+                                 .expected_width = 2,
+                                 .expected_byte_order = upr::ByteOrder::kBigEndian,
+                                 .expected_bit_field_count = 2,
+                                 .expected_has_checksum = true,
+                                 .expected_checksum_algorithm = "crc16_ccitt",
+                             },
+                             ValidYamlCase{
+                                 .name = "explicit_little_endian_override",
+                                 .yaml = R"yaml(
+protocol: endian
+messages:
+  - name: Packet
+    fields:
+      - name: count
+        type: uint16_be
+        endianness: little
+)yaml",
+                                 .protocol_name = "endian",
+                                 .message_name = "Packet",
+                                 .field_name = "count",
+                                 .expected_kind = upr::FieldKind::kUnsigned,
+                                 .expected_width = 2,
+                                 .expected_byte_order = upr::ByteOrder::kLittleEndian,
+                             },
+                             ValidYamlCase{
+                                 .name = "enum_underlying_big_endian",
+                                 .yaml = R"yaml(
+protocol: control
+messages:
+  - name: Status
+    fields:
+      - name: state
+        type: enum
+        underlying: uint16_be
+        values:
+          1: Ready
+)yaml",
+                                 .protocol_name = "control",
+                                 .message_name = "Status",
+                                 .field_name = "state",
+                                 .expected_kind = upr::FieldKind::kEnum,
+                                 .expected_width = 2,
+                                 .expected_byte_order = upr::ByteOrder::kBigEndian,
+                                 .expected_enum_count = 1,
+                             },
+                             ValidYamlCase{
+                                 .name = "signed_integer_type",
+                                 .yaml = R"yaml(
+protocol: signed_values
+messages:
+  - name: Sample
+    fields:
+      - name: delta
+        type: int32
+)yaml",
+                                 .protocol_name = "signed_values",
+                                 .message_name = "Sample",
+                                 .field_name = "delta",
+                                 .expected_kind = upr::FieldKind::kSigned,
+                                 .expected_width = 4,
+                             },
+                             ValidYamlCase{
+                                 .name = "float32_type",
+                                 .yaml = R"yaml(
+protocol: floats
+messages:
+  - name: Sample
+    fields:
+      - name: score
+        type: float32
+)yaml",
+                                 .protocol_name = "floats",
+                                 .message_name = "Sample",
+                                 .field_name = "score",
+                                 .expected_kind = upr::FieldKind::kFloat32,
+                                 .expected_width = 4,
+                             },
+                             ValidYamlCase{
+                                 .name = "float64_with_endianness_override",
+                                 .yaml = R"yaml(
+protocol: analytics
+messages:
+  - name: Sample
+    fields:
+      - name: score
+        type: float64
+        endianness: big
+)yaml",
+                                 .protocol_name = "analytics",
+                                 .message_name = "Sample",
+                                 .field_name = "score",
+                                 .expected_kind = upr::FieldKind::kFloat64,
+                                 .expected_width = 8,
+                                 .expected_byte_order = upr::ByteOrder::kBigEndian,
+                             }),
+                         [](const ::testing::TestParamInfo<ValidYamlCase>& info) { return info.param.name; });
+
+struct InvalidYamlCase {
+  std::string name;
+  std::string yaml;
+  upr::StatusCode expected_code = upr::StatusCode::kInvalidArgument;
+  std::string expected_message_substring;
+};
+
+class InvalidYamlLoaderTest : public ::testing::TestWithParam<InvalidYamlCase> {
+ public:
+  ~InvalidYamlLoaderTest() noexcept override = default;
+};
+
+TEST_P(InvalidYamlLoaderTest, RejectsInvalidDefinitions) {
+  const InvalidYamlCase& param = GetParam();
+
+  upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_yaml(param.yaml);
+
+  ASSERT_FALSE(definition.ok());
+  EXPECT_EQ(definition.status().code(), param.expected_code);
+  EXPECT_NE(std::string(definition.status().message()).find(param.expected_message_substring), std::string::npos);
+}
+
+INSTANTIATE_TEST_SUITE_P(Coverage,
+                         InvalidYamlLoaderTest,
+                         ::testing::Values(
+                             InvalidYamlCase{
+                                 .name = "missing_protocol_name",
+                                 .yaml = R"yaml(messages: [])yaml",
+                                 .expected_message_substring = "requires 'protocol' or 'name'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "missing_messages",
+                                 .yaml = R"yaml(protocol: sample)yaml",
+                                 .expected_message_substring = "requires a 'messages' sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "missing_message_name",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Every message requires 'name'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "missing_fields",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+)yaml",
+                                 .expected_message_substring = "requires a 'fields' sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "missing_field_type",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: value
+)yaml",
+                                 .expected_message_substring = "requires 'name' and 'type'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_underlying_must_be_unsigned",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: state
+        type: enum
+        underlying: int8
+        values:
+          1: Ready
+)yaml",
+                                 .expected_message_substring = "Enum underlying type must be an unsigned scalar",
+                             },
+                             InvalidYamlCase{
+                                 .name = "missing_unsigned_width",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint
+)yaml",
+                                 .expected_message_substring = "Missing width for scalar type",
+                             },
+                             InvalidYamlCase{
+                                 .name = "invalid_unsigned_width_token",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uintx
+)yaml",
+                                 .expected_message_substring = "Invalid scalar width token",
+                             },
+                             InvalidYamlCase{
+                                 .name = "unsupported_unsigned_width_token",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint7
+)yaml",
+                                 .expected_message_substring = "Unsupported scalar width token",
+                             },
+                             InvalidYamlCase{
+                                 .name = "invalid_signed_width_token",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: delta
+        type: intx
+)yaml",
+                                 .expected_message_substring = "Invalid scalar width token",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_requires_width_or_underlying",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: state
+        type: enum
+        values:
+          1: Ready
+)yaml",
+                                 .expected_message_substring = "Enum fields require 'underlying' or 'width'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_requires_values_mapping",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: state
+        type: enum
+        width: 1
+)yaml",
+                                 .expected_message_substring = "Enum fields require a 'values' mapping",
+                             },
+                             InvalidYamlCase{
+                                 .name = "enum_underlying_invalid_width_token",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: state
+        type: enum
+        underlying: uintx
+        values:
+          1: Ready
+)yaml",
+                                 .expected_message_substring = "Invalid scalar width token",
+                             },
+                             InvalidYamlCase{
+                                 .name = "unsupported_endianness",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint16
+        endianness: middle
+)yaml",
+                                 .expected_message_substring = "Unsupported endianness",
+                             },
+                             InvalidYamlCase{
+                                 .name = "unsupported_string_encoding",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: text
+        type: string
+        encoding: utf16
+        size: 2
+)yaml",
+                                 .expected_message_substring = "Unsupported string encoding",
+                             },
+                             InvalidYamlCase{
+                                 .name = "bitfields_must_be_sequence",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: header
+        type: uint8
+        bits: {}
+)yaml",
+                                 .expected_message_substring = "Bitfields must be declared as a sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "bitfield_requires_name_offset_width",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: header
+        type: uint8
+        bits:
+          - offset: 0
+            width: 1
+)yaml",
+                                 .expected_message_substring = "Each bitfield requires 'name', 'offset', and 'width'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "bitfield_enum_values_require_mapping",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: header
+        type: uint8
+        bits:
+          - name: mode
+            offset: 0
+            width: 2
+            values: []
+)yaml",
+                                 .expected_message_substring = "Enum-style values require a mapping",
+                             },
+                             InvalidYamlCase{
+                                 .name = "checksum_requires_algorithm",
+                                 .yaml = R"yaml(
+protocol: sample
+messages:
+  - name: Packet
+    fields:
+      - name: crc
+        type: uint8
+        checksum: {}
+)yaml",
+                                 .expected_message_substring = "require an 'algorithm'",
+                             },
+                             InvalidYamlCase{
+                                 .name = "structs_must_be_sequence",
+                                 .yaml = R"yaml(
+protocol: sample
+structs: {}
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Protocol YAML field 'structs' must be a sequence",
+                             },
+                             InvalidYamlCase{
+                                 .name = "struct_requires_fields_sequence",
+                                 .yaml = R"yaml(
+protocol: sample
+structs:
+  - name: Header
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml",
+                                 .expected_message_substring = "Every struct requires a 'fields' sequence",
+                             }),
+                         [](const ::testing::TestParamInfo<InvalidYamlCase>& info) { return info.param.name; });
+
+TEST(YamlLoaderTest, LoadsDefinitionFromFile) {
+  const std::string path = "/tmp/upr_yaml_loader_test.yaml";
+  {
+    std::ofstream output(path);
+    output << R"yaml(
+protocol: file_protocol
+messages:
+  - name: Packet
+    fields:
+      - name: value
+        type: uint8
+)yaml";
+  }
+
+  upr::StatusOr<upr::ProtocolDefinition> definition = upr::load_protocol_definition_from_file(path);
+
+  ASSERT_TRUE(definition.ok()) << definition.status().message();
+  EXPECT_EQ(definition.value().name, "file_protocol");
+  std::remove(path.c_str());
+}
+
+TEST(YamlLoaderTest, ReturnsIoErrorWhenFileCannotBeOpened) {
+  upr::StatusOr<upr::ProtocolDefinition> definition =
+      upr::load_protocol_definition_from_file("/tmp/definitely_missing_protocol.yaml");
+
+  ASSERT_FALSE(definition.ok());
+  EXPECT_EQ(definition.status().code(), upr::StatusCode::kIoError);
+}
+
+TEST(YamlLoaderTest, ReturnsSchemaErrorForMalformedYaml) {
+  upr::StatusOr<upr::ProtocolDefinition> definition =
+      upr::load_protocol_definition_from_yaml("protocol: bad\nmessages: [");
+
+  ASSERT_FALSE(definition.ok());
+  EXPECT_EQ(definition.status().code(), upr::StatusCode::kSchemaError);
+}
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
+}  // namespace

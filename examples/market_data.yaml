@@ -1,0 +1,28 @@
+protocol: market_data
+messages:
+  - name: Order
+    fields:
+      - name: message_type
+        type: uint8
+        expect: 1
+      - name: symbol
+        type: string
+        encoding: ascii
+        size: 4
+      - name: price
+        type: float32_le
+      - name: quantity
+        type: uint32_le
+      - name: side
+        type: enum
+        underlying: uint8
+        values:
+          1: Buy
+          2: Sell
+      - name: order_type
+        type: enum
+        underlying: uint8
+        values:
+          1: Limit
+          2: Market
+          3: IOC

@@ -1,0 +1,9 @@
+namespace upr_benchmarks;
+
+table BlobEnvelope {
+  message_type:ubyte;
+  payload:[ubyte];
+  checksum:ubyte;
+}
+
+root_type BlobEnvelope;
